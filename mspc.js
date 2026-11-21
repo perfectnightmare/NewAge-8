@@ -53,7 +53,7 @@ const scripts = [
   { name: 'Daily Tasks', fn: runDailyTasks, alwaysRun: true },
 
   { name: 'Boyfriend Kiss', fn: runBoyfriendKiss, alwaysRun: true },
-  { name: 'Guild Attack', fn: runGuildAttack, alwaysRun: false },
+  { name: 'Guild Attack', fn: runGuildAttack, alwaysRun: true },
 
   { name: 'Guild Show', fn: runGuildShow, alwaysRun: true },
 

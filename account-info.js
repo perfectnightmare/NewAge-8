@@ -9,6 +9,13 @@ const num = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
+const decodeEntities = (s) => String(s ?? '')
+  .replace(/&amp;/g, '&')
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"')
+  .replace(/&#0?39;/g, "'");
+
 // Pull the {...} argument out of LadyHeader.setLadyStats({...}) by matching braces
 // (more reliable than a regex because the JSON is large and nested).
 function extractLadyStats(html) {
@@ -164,6 +171,52 @@ async function getStats(page) {
   }, json.statsHtml);
 }
 
+// Club page: club name + trophies.
+// The page has no trophy names, only an ID and an effect text per trophy,
+// so the effect text (without the shared "-10% popularity" line) is used as the name.
+async function getGuildInfo(page) {
+  const res = await page.request.get(`${BASE}/guild.php`, {
+    headers: {
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'en-US,en;q=0.9',
+      'upgrade-insecure-requests': '1',
+      referer: `${BASE}/welcome.php`
+    }
+  });
+  if (!res.ok()) throw new Error(`guild.php returned HTTP ${res.status()}`);
+
+  const html = await res.text();
+
+  // Not in a club: no club name on the page. Not an error.
+  const nameMatch = html.match(/<h2 id="guildName">([^<]*)<\/h2>/);
+  if (!nameMatch) {
+    return { id: null, name: null, trophyCount: 0, trophies: '', trophyIds: '' };
+  }
+
+  const idMatch = html.match(/showInfoPopup\((\d+)\)/);
+
+  const trophies = [];
+  const ids = [];
+  const re = /<li class="trophy trophy-(\d+)[^"]*"\s+title="([^"]*)"/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const effect = decodeEntities(m[2])
+      .split(/<br\s*\/?>/i)[0]        // drop the shared "-10% popularity" line
+      .replace(/[\[\]]/g, '')          // GitHub masks [ ] in logs
+      .trim();
+    ids.push(m[1]);
+    trophies.push(effect);
+  }
+
+  return {
+    id: idMatch ? idMatch[1] : null,
+    name: decodeEntities(nameMatch[1]).replace(/[\[\]]/g, '').trim(),
+    trophyCount: trophies.length,
+    trophies: trophies.join(' | '),   // string, not array: [ ] would be masked in logs
+    trophyIds: ids.join(',')
+  };
+}
+
 module.exports = async function runAccountInfo(page) {
   console.log('📊 Collecting account info...');
 
@@ -186,8 +239,16 @@ module.exports = async function runAccountInfo(page) {
     console.log(`❌ Step 2 (stats) failed: ${err.message}`);
   }
 
+  // Step 3: club page
+  try {
+    payload.guild = await getGuildInfo(page);
+  } catch (err) {
+    errors.push(`Step 3: ${err.message}`);
+    console.log(`❌ Step 3 (club) failed: ${err.message}`);
+  }
+
   // ---------- Human-readable log ----------
-  const { currencies: c, season: s, identity: id, popularity: p } = payload;
+  const { currencies: c, season: s, identity: id, popularity: p, guild: g } = payload;
 
   console.log(DIVIDER);
   console.log('📋 ACCOUNT INFO');
@@ -217,6 +278,10 @@ module.exports = async function runAccountInfo(page) {
       );
     }
   }
+  if (g) {
+    console.log(`🏰 Club: ${g.name ?? '(no club)'} (ID ${g.id ?? '-'}) | Trophies: ${g.trophyCount}`);
+    if (g.trophies) console.log(`🏅 ${g.trophies}`);
+  }
 
   // ---------- Machine-readable line (for the Google Sheet parser) ----------
   // errorCount is a plain number, so the line has no [ ] for GitHub to mask as ***
@@ -224,8 +289,8 @@ module.exports = async function runAccountInfo(page) {
   console.log(`LP_INFO_JSON ${JSON.stringify(payload)}`);
   console.log(DIVIDER);
 
-  // Let the main script know this step failed if both parts broke
-  if (errors.length === 2) {
+  // Let the main script know this step failed if all parts broke
+  if (errors.length === 3) {
     throw new Error(errors.join(' | '));
   }
 };

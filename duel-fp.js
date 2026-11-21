@@ -3,19 +3,17 @@
 // Steps performed by this script:
 //
 // 1. Open the Duels page.
-// 2. Send buyFashionPoints ONCE (no dollar-based decision anymore).
-// 3. Send getStatistics and read the base/practice numbers for
+// 2. Send getStatistics and read the base/practice numbers for
 //    Elegance (style), Creativity (creativity), Confidence (devotion),
 //    and Grace (beauty). Kindness and Loyalty are ignored.
-// 4. Case 1: if ANY of those 4 numbers is < 200 -> STOP. Nothing else
-//    is sent.
-// 5. Case 2: if ALL 4 numbers are >= 200 -> pick the stat with the
-//    LOWEST base/practice number (random tie-break if there's a tie),
-//    then send trainStats for that stat 5 times in a row.
+//    Also read the available Fashion Points (FP), if possible.
+// 3. Case 1: if ANY of those 4 numbers is < 200 -> STOP.
+// 4. Case 2: if ALL 4 numbers are >= 200 -> pick the stat with the
+//    LOWEST base/practice number (random tie-break), then train it
+//    with FP, but only if enough FP is available.
 //
 // Important:
-// - buyFashionPoints always uses fpToBuy=2201.
-// - buyFashionPoints goes to /ajax/train.php.
+// - This script does NOT buy Fashion Points. It only spends FP you already have.
 // - getStatistics goes to /ajax/main.php.
 // - trainStats goes to /ajax/train.php, amount is always 2000.
 // - Playwright's existing logged-in browser session is used.
@@ -24,6 +22,8 @@
 const DUELS_URL = 'https://v3.g.ladypopular.com/duels.php';
 const TRAIN_URL = 'https://v3.g.ladypopular.com/ajax/train.php';
 const MAIN_URL = 'https://v3.g.ladypopular.com/ajax/main.php';
+
+const TRAIN_AMOUNT = 2000;
 
 // Maps the internal payload key -> friendly display name.
 const STAT_LABELS = {
@@ -40,17 +40,6 @@ const STAT_KEYS = ['style', 'creativity', 'devotion', 'beauty'];
 // ------------------------------------------------------------
 // Helper: extract base/practice numbers from getStatistics HTML
 // ------------------------------------------------------------
-//
-// The statsHtml returned by getStatistics repeats a template block
-// per stat, each starting with `<li class="player-stat...`. Inside
-// each block, the FIRST `<div class="value">NUMBER</div>` found
-// after the stat's data-type marker is the base/practice number
-// (e.g. 101, 101, 101, 100 in your example).
-//
-// We split on the `<li class="player-stat` marker and, for each
-// resulting chunk, check whether it belongs to one of our 4 tracked
-// stats (style / creativity / devotion / beauty), then pull that
-// first "value" number out of it.
 
 function extractBaseStatValues(statsHtml) {
 
@@ -84,6 +73,22 @@ function extractBaseStatValues(statsHtml) {
 
 
 // ------------------------------------------------------------
+// Helper: extract available FP from getStatistics HTML
+// (same element account-info.js reads: .total-fp-amount-js)
+// Returns null if it can't be found.
+// ------------------------------------------------------------
+
+function extractAvailableFP(statsHtml) {
+
+  const match = statsHtml.match(
+    /class="[^"]*total-fp-amount-js[^"]*"[^>]*>\s*([\d,]+)/
+  );
+
+  return match ? parseInt(match[1].replace(/,/g, ''), 10) : null;
+}
+
+
+// ------------------------------------------------------------
 // Main function
 // ------------------------------------------------------------
 
@@ -91,7 +96,7 @@ module.exports = async function runDuelFP(page) {
 
   console.log('');
   console.log('────────────────────────────────────────────────────────────────────────────────');
-  console.log('⚔️ Starting Duel FP conversion/distribution...');
+  console.log('⚔️ Starting Duel FP distribution (no FP purchase)...');
   console.log('────────────────────────────────────────────────────────────────────────────────');
 
 
@@ -108,103 +113,20 @@ module.exports = async function runDuelFP(page) {
 
   console.log('✅ Duels page loaded.');
 
-  // Give the page a little time to finish populating its
-  // dynamically loaded elements.
   await page.waitForTimeout(3000);
 
 
   // ============================================================
   // STEP 2
-  // Send buyFashionPoints ONCE (unconditionally)
+  // Send getStatistics and read the base/practice numbers + FP
   // ============================================================
 
   console.log('');
-  console.log('💳 Step 2: Sending buyFashionPoints request...');
-  console.log('📦 type=buyFashionPoints');
-  console.log('📦 fpToBuy=2201');
-  console.log('🔄 Sending request ONCE...');
-
-  try {
-
-    const response = await page.request.post(
-      TRAIN_URL,
-      {
-        form: {
-          type: 'buyFashionPoints',
-          fpToBuy: '2201'
-        },
-        headers: {
-          'X-Requested-With': 'XMLHttpRequest'
-        }
-      }
-    );
-
-    const responseText = await response.text();
-
-    console.log(
-      `📡 buyFashionPoints HTTP status: ${response.status()}`
-    );
-
-    console.log(
-      `📨 buyFashionPoints response: ${responseText}`
-    );
-
-    if (!response.ok()) {
-
-      throw new Error(
-        `buyFashionPoints request returned HTTP ${response.status()}`
-      );
-
-    }
-
-    try {
-
-      const data = JSON.parse(responseText);
-
-      if (data.status === 1) {
-
-        console.log(
-          '✅ buyFashionPoints request succeeded.'
-        );
-
-      } else {
-
-        console.log(
-          `⚠️ buyFashionPoints returned status: ${data.status}`
-        );
-
-      }
-
-    } catch {
-
-      console.log(
-        '⚠️ Could not parse buyFashionPoints response as JSON.'
-      );
-
-    }
-
-  } catch (error) {
-
-    console.log(
-      `❌ buyFashionPoints request failed: ${error.message}`
-    );
-
-    // Stop here because the rest of the flow depends on the
-    // conversion having actually happened.
-    throw error;
-  }
-
-
-  // ============================================================
-  // STEP 3
-  // Send getStatistics and read the base/practice numbers
-  // ============================================================
-
-  console.log('');
-  console.log('📊 Step 3: Sending getStatistics request...');
+  console.log('📊 Step 2: Sending getStatistics request...');
   console.log('📦 type=getStatistics');
 
   let statValues = {};
+  let availableFP = null;
 
   try {
 
@@ -245,6 +167,7 @@ module.exports = async function runDuelFP(page) {
     }
 
     statValues = extractBaseStatValues(data.statsHtml);
+    availableFP = extractAvailableFP(data.statsHtml);
 
     console.log('🔎 Base/practice numbers extracted:');
 
@@ -255,6 +178,10 @@ module.exports = async function runDuelFP(page) {
       );
 
     }
+
+    console.log(
+      `👗 Available FP: ${availableFP === null ? 'could not be read' : availableFP}`
+    );
 
   } catch (error) {
 
@@ -274,15 +201,13 @@ module.exports = async function runDuelFP(page) {
 
 
   // ============================================================
-  // STEP 4
+  // STEP 3
   // Decide: Case 1 (stop) vs Case 2 (train weakest stat)
   // ============================================================
 
   console.log('');
-  console.log('🧮 Step 4: Evaluating stats...');
+  console.log('🧮 Step 3: Evaluating stats...');
 
-  // If any of the 4 tracked values is missing or NaN, treat that
-  // as "could not confirm >= 200" and stop, same as Case 1.
   const missingOrInvalid = STAT_KEYS.some(
     (key) => statValues[key] === undefined || isNaN(statValues[key])
   );
@@ -331,6 +256,28 @@ module.exports = async function runDuelFP(page) {
 
 
   // ------------------------------------------------------------
+  // FP check: no buying anymore, so only train if FP is enough.
+  // If FP could not be read, try anyway and let the server decide.
+  // ------------------------------------------------------------
+
+  if (availableFP !== null && availableFP < TRAIN_AMOUNT) {
+
+    console.log(
+      `⚠️ Only ${availableFP} FP available, need ${TRAIN_AMOUNT} to train.`
+    );
+
+    console.log(
+      '🛑 Not enough FP and buying is disabled. Stopping here.'
+    );
+
+    console.log('────────────────────────────────────────────────────────────────────────────────');
+
+    return;
+
+  }
+
+
+  // ------------------------------------------------------------
   // Pick the stat with the lowest base/practice number.
   // Random tie-break if 2+ stats share the lowest value.
   // ------------------------------------------------------------
@@ -368,18 +315,20 @@ module.exports = async function runDuelFP(page) {
 
 
   // ============================================================
-  // STEP 5
-  // Send trainStats for the chosen stat, 5 times in a row
+  // STEP 4
+  // Send trainStats for the chosen stat
   // ============================================================
+
+  const REPS = 1; // change this if you want more than one training request
 
   console.log('');
   console.log(
-    `🏋️ Step 5: Sending trainStats for ${STAT_LABELS[chosenKey]} (${chosenKey}) x5...`
+    `🏋️ Step 4: Sending trainStats for ${STAT_LABELS[chosenKey]} (${chosenKey}) x${REPS}...`
   );
 
-  for (let i = 1; i <= 1; i++) {
+  for (let i = 1; i <= REPS; i++) {
 
-    console.log(`➡️ trainStats request ${i}/1 for ${chosenKey}...`);
+    console.log(`➡️ trainStats request ${i}/${REPS} for ${chosenKey}...`);
 
     try {
 
@@ -390,7 +339,7 @@ module.exports = async function runDuelFP(page) {
             type: 'trainStats',
             popularityType: chosenKey,
             practiceType: 'fp',
-            amount: '2000'
+            amount: String(TRAIN_AMOUNT)
           },
           headers: {
             'X-Requested-With': 'XMLHttpRequest'
@@ -401,11 +350,11 @@ module.exports = async function runDuelFP(page) {
       const responseText = await response.text();
 
       console.log(
-        `📡 trainStats (${i}/1) HTTP status: ${response.status()}`
+        `📡 trainStats (${i}/${REPS}) HTTP status: ${response.status()}`
       );
 
       console.log(
-        `📨 trainStats (${i}/1) response: ${responseText}`
+        `📨 trainStats (${i}/${REPS}) response: ${responseText}`
       );
 
       if (!response.ok()) {
@@ -423,13 +372,13 @@ module.exports = async function runDuelFP(page) {
         if (data.status === 1) {
 
           console.log(
-            `✅ trainStats (${i}/1) succeeded: ${data.message || ''}`
+            `✅ trainStats (${i}/${REPS}) succeeded: ${data.message || ''}`
           );
 
         } else {
 
           console.log(
-            `⚠️ trainStats (${i}/1) returned status: ${data.status}`
+            `⚠️ trainStats (${i}/${REPS}) returned status: ${data.status}`
           );
 
         }
@@ -437,7 +386,7 @@ module.exports = async function runDuelFP(page) {
       } catch {
 
         console.log(
-          `⚠️ Could not parse trainStats (${i}/1) response as JSON.`
+          `⚠️ Could not parse trainStats (${i}/${REPS}) response as JSON.`
         );
 
       }
@@ -445,10 +394,9 @@ module.exports = async function runDuelFP(page) {
     } catch (error) {
 
       console.log(
-        `❌ trainStats request ${i}/1 failed: ${error.message}`
+        `❌ trainStats request ${i}/${REPS} failed: ${error.message}`
       );
 
-      // One failed rep shouldn't stop the remaining reps.
       continue;
 
     }
@@ -461,6 +409,6 @@ module.exports = async function runDuelFP(page) {
   // ============================================================
 
   console.log('');
-  console.log('✅ Duel FP conversion/distribution completed.');
+  console.log('✅ Duel FP distribution completed.');
   console.log('────────────────────────────────────────────────────────────────────────────────');
 };
