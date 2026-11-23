@@ -42,7 +42,7 @@ const scripts = [
   { name: 'Battle Pass Chests', fn: runBattlePassChests, alwaysRun: true },
   { name: 'Burn Energy-After', fn: runBurnEnergy, alwaysRun: true },
   { name: 'New Account', fn: runNewAccount, alwaysRun: true },
-  { name: 'Furniture Script', fn: runFurnitureScript, alwaysRun: true },
+  //{ name: 'Furniture Script', fn: runFurnitureScript, alwaysRun: true },
   { name: 'Teleport Activation', fn: runTeleport, alwaysRun: true },
   { name: 'Account Info', fn: runAccountInfo, alwaysRun: true },
 
