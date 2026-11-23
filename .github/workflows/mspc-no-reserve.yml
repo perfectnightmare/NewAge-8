@@ -55,6 +55,10 @@ jobs:
           LP_FASHION_MAGAZINE_URL: ${{ secrets.LP_FASHION_MAGAZINE_URL }}
           LP_SOLITAIRE_URL: ${{ secrets.LP_SOLITAIRE_URL }}
           TICKET_RESERVE: 0
+          BOARD_URL: ${{ secrets.BOARD_URL }}
+          BOARD_PASSWORD: ${{ secrets.BOARD_PASSWORD }}
+          OUTFIT_DRY_RUN: 0
+          ALLOW_UNLOCK: 1
 
       - name: 🖼️ Upload error screenshots if failed
         if: failure()

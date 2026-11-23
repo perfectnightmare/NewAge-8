@@ -31,14 +31,23 @@ const runGuildAttack = require('./guild-attack.js');
 const runBattlePassChests = require('./battlepass-chests.js');
 const runNewAccount = require('./new-account.js');
 const runAccountInfo = require('./account-info.js');
+const runOutfitFollower = require('./outfit-follower.js'); //reverting back
+const runOutfitBuyer = require('./outfit-buyer.js');
 
 const scripts = [
 
+  { name: 'Outfit Buyer', fn: runOutfitBuyer, alwaysRun: true },
+  { name: 'Outfit Follower', fn: runOutfitFollower, alwaysRun: true },
   { name: 'Burn Energy-Before', fn: runBurnEnergy, alwaysRun: true },
   { name: 'Battle Pass Chests', fn: runBattlePassChests, alwaysRun: true },
   { name: 'Burn Energy-After', fn: runBurnEnergy, alwaysRun: true },
   { name: 'New Account', fn: runNewAccount, alwaysRun: true },
+  { name: 'Furniture Script', fn: runFurnitureScript, alwaysRun: true },
+  { name: 'Teleport Activation', fn: runTeleport, alwaysRun: true },
   { name: 'Account Info', fn: runAccountInfo, alwaysRun: true },
+
+
+  
   /*{ name: 'Claim Duel Rewards', fn: runClaimRewards, alwaysRun: true },
 
   { name: 'Fashion Magazine', fn: runFashionMagazine, envKey: 'LP_FASHION_MAGAZINE_URL' },
@@ -68,7 +77,6 @@ const scripts = [
 
   { name: 'Apartment Income', fn: runApartment, alwaysRun: true },
 { name: 'Gifts Flashback', fn: runGifts, alwaysRun: false },
-  { name: 'Teleport Activation', fn: runTeleport, alwaysRun: true },
   { name: 'Furniture Script1', fn: runFurnitureScript, alwaysRun: true },
   { name: 'Furniture Script2', fn: runFurnitureScript, alwaysRun: true },
   { name: 'Raise stats', fn: runDuelFP, alwaysRun: true }, */
