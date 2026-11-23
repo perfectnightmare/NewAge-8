@@ -742,12 +742,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
     // RANDOMLY CHOOSE ONE UNLOCKED EVENT
     // ==============================================================
 
-    const randomIndex = Math.floor(
-      Math.random() * unlockedEvents.length
-    );
-
-
-    const selectedEvent = unlockedEvents[randomIndex];
+    const selectedEvent = unlockedEvents[0];
 
 
     console.log(
@@ -965,8 +960,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
   // STEP 4 — Activate a random uncompleted zone
   // ----------------------------------------------------------------
 
-  const zoneRandomIndex = Math.floor(Math.random() * uncompletedZones.length);
-  const chosenZone = uncompletedZones[zoneRandomIndex];
+  const chosenZone = uncompletedZones[0];
 
   console.log(
     `🎯 [Step 4] Activating zone: ${chosenZone.name} (ID ${chosenZone.id})`
