@@ -1,8 +1,10 @@
 // outfit-follower.js
 // MORNING (server time before noon): every account switches to its own saved F1/F2/F3 outfit.
-// EVENING (noon to midnight): follower accounts (never main) copy main's themed look from the board,
-// only if the record is for today, says "dress up", and the account owns every piece. Makeup is never changed.
+// EVENING (noon to midnight): follower accounts (never main) copy main's look from the board,
+// only if the record is for today, says "dress up", and the account owns every piece (event items included).
+// Makeup is never changed (it is read from the account itself).
 // OUTFIT_DRY_RUN=1 logs what it WOULD do without changing anything.
+// Console output: one line on success; the full log only when something is not a clean success.
 
 const BASE = 'https://v3.g.ladypopular.com';
 const DEFAULT_NAMES = ['f1', 'f2', 'f3'];
@@ -11,6 +13,15 @@ const DRY_RUN = process.env.OUTFIT_DRY_RUN === '1';
 const MAIN_LADY_ID = String(process.env.MAIN_LADY_ID || '8859158');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const pad = (n) => String(n).padStart(2, '0');
+
+// ---------------------------------------------------------------- buffered logging
+let buf = [];
+const log = (msg) => { buf.push(msg); };
+function flush() { buf.forEach(l => console.log(l)); buf = []; }
+function finish(successSummary) {
+  if (successSummary && !DRY_RUN) { console.log(successSummary); buf = []; }
+  else flush();
+}
 
 const HEADERS = {
   accept: '*/*',
@@ -66,7 +77,7 @@ async function getClock(page) {
   const c = html.match(/"reset_daily_quests_time_left":\s*"?(\d+)"?/);
   const countdown = c && +c[1] <= 86400 ? +c[1] : null;
   if (seconds === null && countdown !== null) seconds = (86400 - countdown) % 86400;
-  console.log(`🕒 Clock: ${raw || 'not found'} | reset countdown: ${countdown !== null ? countdown + 's left' : 'not found'} | Lady ID: ${ladyId}`);
+  log(`🕒 Clock: ${raw || 'not found'} | reset countdown: ${countdown !== null ? countdown + 's left' : 'not found'} | Lady ID: ${ladyId}`);
   return { seconds, date, ladyId };
 }
 
@@ -89,15 +100,16 @@ async function loadAllOutfits(page) {
   return all;
 }
 
+// returns a success summary string, or null when it is not a clean success
 async function revertToDefault(page) {
   const outfits = await loadAllOutfits(page);
-  console.log(`📂 ${outfits.length} saved outfit(s): ${outfits.map(o => o.name).join(', ')}`);
+  log(`📂 ${outfits.length} saved outfit(s): ${outfits.map(o => o.name).join(', ')}`);
   const defaults = outfits.filter(o => DEFAULT_NAMES.includes(String(o.lowercase_name ?? o.name ?? '').trim().toLowerCase()));
-  if (defaults.length === 0) { console.log('⚠️ No saved outfit named F1, F2 or F3 on this account. Leaving the look as it is.'); return; }
-  if (defaults.length > 1) { console.log(`⚠️ More than one default outfit found (${defaults.map(o => o.name).join(', ')}). Leaving the look as it is.`); return; }
+  if (defaults.length === 0) { log('⚠️ No saved outfit named F1, F2 or F3 on this account. Leaving the look as it is.'); return null; }
+  if (defaults.length > 1) { log(`⚠️ More than one default outfit found (${defaults.map(o => o.name).join(', ')}). Leaving the look as it is.`); return null; }
   const target = defaults[0];
-  console.log(`🎯 Default outfit: "${target.name}" (id ${target.id})`);
-  if (DRY_RUN) { console.log('🧪 DRY RUN: would switch to it now. Nothing changed.'); return; }
+  log(`🎯 Default outfit: "${target.name}" (id ${target.id})`);
+  if (DRY_RUN) { log('🧪 DRY RUN: would switch to it now. Nothing changed.'); return null; }
   const res = await page.request.post(`${BASE}/ajax/wardrobe/lady.php`, {
     headers: { accept: '*/*', 'x-requested-with': 'XMLHttpRequest', referer: HEADERS.referer },
     form: { action: 'changeOutfit', outfitId: String(target.id), wardrobetype: 'wardrobe', contenttype: '', contentid: '', page: '1', apply_appearance: 'true' }
@@ -105,10 +117,11 @@ async function revertToDefault(page) {
   if (!res.ok()) throw new Error(`changeOutfit returned HTTP ${res.status()}`);
   const json = await res.json();
   if (json?.status !== 1) throw new Error(`changeOutfit failed: ${JSON.stringify(json).slice(0, 300)}`);
-  console.log(`✅ Switched to "${target.name}".`);
+  log(`✅ Switched to "${target.name}".`);
+  return `✅ Outfit follower: reverted to default "${target.name}".`;
 }
 
-// ---------------------------------------------------------------- EVENING: copy main's themed look
+// ---------------------------------------------------------------- EVENING: copy main's look
 async function boardRead() {
   let lastErr;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -172,61 +185,76 @@ async function ownedRows(page, cat) {
   return map;
 }
 
+// returns a success summary string, or null when it is not a clean success
 async function dressFromBoard(page, clock) {
-  if (clock.ladyId === MAIN_LADY_ID) { console.log('⏭️ This is the main account. Nothing to copy; it keeps whatever you dressed it in.'); return; }
-  if (!process.env.BOARD_URL || !process.env.BOARD_PASSWORD) { console.log('⚠️ BOARD_URL / BOARD_PASSWORD are not set. Staying in the default outfit.'); return; }
-  if (!clock.date) { console.log('⚠️ Could not read today\'s game date. Staying in the default outfit.'); return; }
+  if (clock.ladyId === MAIN_LADY_ID) { log('⏭️ This is the main account. Nothing to copy; it keeps whatever you dressed it in.'); return '✅ Outfit follower: main account, nothing to copy.'; }
+  if (!process.env.BOARD_URL || !process.env.BOARD_PASSWORD) { log('⚠️ BOARD_URL / BOARD_PASSWORD are not set. Staying in the default outfit.'); return null; }
+  if (!clock.date) { log('⚠️ Could not read today\'s game date. Staying in the default outfit.'); return null; }
 
   const rec = await boardRead();
-  if (!rec) { console.log('ℹ️ The board is empty. Staying in the default outfit.'); return; }
-  console.log(`📋 Board record: game date ${rec.gameDate}, saved ${rec.savedAt}, dress up: ${rec.dressUp}`);
-  if (rec.gameDate !== clock.date) { console.log(`ℹ️ The record is for ${rec.gameDate}, today is ${clock.date}. Too old, staying in the default outfit.`); return; }
-  if (!rec.dressUp) { console.log(`ℹ️ The record says no dress up (${rec.reason}). Staying in the default outfit.`); return; }
+  if (!rec) { log('ℹ️ The board is empty. Staying in the default outfit.'); return null; }
+  log(`📋 Board record: game date ${rec.gameDate}, saved ${rec.savedAt}, dress up: ${rec.dressUp}`);
+  if (rec.gameDate !== clock.date) { log(`ℹ️ The record is for ${rec.gameDate}, today is ${clock.date}. Too old, staying in the default outfit.`); return null; }
+  if (!rec.dressUp) { log(`ℹ️ The record says no dress up (${rec.reason}). Staying in the default outfit.`); return null; }
 
   const look = (rec.look || []).slice().sort((a, b) => b.layer - a.layer);
-  if (look.length === 0) { console.log('ℹ️ The record has no worn items. Staying in the default outfit.'); return; }
-  if (look.some(l => l.kind === 'event')) { console.log('ℹ️ The record contains an event item. Staying in the default outfit.'); return; }
+  if (look.length === 0) { log('ℹ️ The record has no worn items. Staying in the default outfit.'); return null; }
 
-  // does this account own every piece?
+  // does this account own every piece? (event items are checked like any other piece)
   const cats = [...new Set(look.map(l => l.category))];
   const owned = {};
   for (const cat of cats) { owned[cat] = await ownedRows(page, cat); await sleep(400); }
   const rows = [], missing = [];
   for (const l of look) {
     const row = owned[l.category] && owned[l.category][l.itemId] && owned[l.category][l.itemId][l.colour];
-    console.log(`👗 layer ${l.layer}: item ${l.itemId} colour ${l.colour} (${l.kind}) -> ${row ? 'owned, row ' + row : 'NOT OWNED'}`);
+    log(`👗 layer ${l.layer}: item ${l.itemId} colour ${l.colour} (${l.kind}) -> ${row ? 'owned, row ' + row : 'NOT OWNED'}`);
     if (row) rows.push({ id: row, layer: l.layer }); else missing.push(l);
   }
   if (missing.length) {
-    console.log(`⏭️ Missing ${missing.length} piece(s). Staying in the default outfit: ${missing.map(m => `${m.itemId}/colour ${m.colour} (${m.kind})`).join(', ')}`);
-    return;
+    log(`⏭️ Missing ${missing.length} piece(s). Staying in the default outfit: ${missing.map(m => `${m.itemId}/colour ${m.colour} (${m.kind})`).join(', ')}`);
+    return null;
   }
 
   const mine = await readLook(page);
-  if (!mine.appearance) { console.log('⚠️ Could not read this account\'s own makeup. Staying in the default outfit.'); return; }
+  if (!mine.appearance) { log('⚠️ Could not read this account\'s own makeup. Staying in the default outfit.'); return null; }
   const items = rows.map((r, i) => `items%5B${i}%5D%5Bid%5D=${r.id}&items%5B${i}%5D%5Boffset%5D=${r.layer}`).join('&');
   const body = `action=saveChanges&selectedPet=&${items}&${appearanceBody(mine.appearance)}`;
-  if (DRY_RUN) { console.log('🧪 DRY RUN: the account owns every piece. Would save the look now. Nothing changed.'); return; }
+  if (DRY_RUN) { log('🧪 DRY RUN: the account owns every piece. Would save the look now. Nothing changed.'); return null; }
 
   const r = await postBody(page, '/ajax/wardrobe/lady.php', body);
-  if (!r || r.status !== 1) throw new Error(`saveChanges failed: ${JSON.stringify(r).slice(0, 300)}`);
+  const noChange = r && r.status === 0 && /no changes made/i.test(String(r.message || ''));
+  if (noChange) log('ℹ️ The game says "No changes made", so the look is already on.');
+  else if (!r || r.status !== 1) throw new Error(`saveChanges failed: ${JSON.stringify(r).slice(0, 300)}`);
   const after = await readLook(page);
   const want = look.map(l => `${l.itemId}:${l.colour}`).sort().join(',');
   const got = after.worn.map(w => `${w.itemId}:${w.colour}`).sort().join(',');
-  console.log(want === got ? `✅ Look saved and confirmed (${look.length} pieces).` : `⚠️ Look saved, but what is worn now differs from the record. Wanted ${want}, got ${got}.`);
+  if (want === got) {
+    log(`✅ Look saved and confirmed (${look.length} pieces).`);
+    return `✅ Outfit follower: ${noChange ? 'look already on' : 'look copied'} and confirmed (${look.length} pieces).`;
+  }
+  log(`⚠️ Look saved, but what is worn now differs from the record. Wanted ${want}, got ${got}.`);
+  return null;
 }
 
 // ---------------------------------------------------------------- entry point
 module.exports = async function runOutfitFollower(page) {
-  console.log(DRY_RUN ? '👗 Outfit follower (DRY RUN)' : '👗 Outfit follower');
-  const clock = await getClock(page);
-  if (clock.seconds === null) { console.log('❌ Could not read the server time. Doing nothing; the look stays as it is.'); return; }
-  console.log(`🕒 Server time: ${pad(Math.floor(clock.seconds / 3600))}:${pad(Math.floor((clock.seconds % 3600) / 60))}`);
-  if (clock.seconds >= EVENING_FROM_HOUR * 3600) {
-    console.log('🌆 Evening phase (after noon, before midnight): looking for a themed look to copy.');
-    await dressFromBoard(page, clock);
-  } else {
-    console.log('🌅 Morning phase (after midnight, before noon): reverting to the default outfit.');
-    await revertToDefault(page);
+  buf = [];
+  try {
+    log(DRY_RUN ? '👗 Outfit follower (DRY RUN)' : '👗 Outfit follower');
+    const clock = await getClock(page);
+    if (clock.seconds === null) { log('❌ Could not read the server time. Doing nothing; the look stays as it is.'); finish(null); return; }
+    log(`🕒 Server time: ${pad(Math.floor(clock.seconds / 3600))}:${pad(Math.floor((clock.seconds % 3600) / 60))}`);
+    let summary;
+    if (clock.seconds >= EVENING_FROM_HOUR * 3600) {
+      log('🌆 Evening phase (after noon, before midnight): looking for a look to copy.');
+      summary = await dressFromBoard(page, clock);
+    } else {
+      log('🌅 Morning phase (after midnight, before noon): reverting to the default outfit.');
+      summary = await revertToDefault(page);
+    }
+    finish(summary);
+  } catch (e) {
+    flush();            // show everything that happened before the error
+    throw e;            // the launcher prints the ❌ line
   }
 };

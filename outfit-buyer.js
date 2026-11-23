@@ -4,6 +4,7 @@
 //  2) mall items main is wearing (only when the record says "dress up")
 // Unlocks the flashback collection ONLY if: no flashback collection is active here, the free slot is available, and ALLOW_UNLOCK=1.
 // OUTFIT_DRY_RUN=1 logs what it WOULD do and changes nothing.
+// Console output: one line on a clean success; the full log when anything is not a clean success.
 
 const BASE = 'https://v3.g.ladypopular.com';
 const DRY_RUN = process.env.OUTFIT_DRY_RUN === '1';
@@ -14,6 +15,17 @@ const CUR = { 1: 'dollars', 2: 'emeralds', 3: 'diamonds' };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const pad = (n) => String(n).padStart(2, '0');
 const safe = (o) => JSON.stringify(o).replace(/\[/g, '⟦').replace(/\]/g, '⟧').slice(0, 400);
+
+// ---------------------------------------------------------------- buffered logging
+let buf = [];
+let dirty = false;                                   // set when something is not a clean success
+const log = (msg) => { buf.push(msg); };             // normal information
+const warn = (msg) => { dirty = true; buf.push(msg); }; // something wanted did not happen
+function flush() { buf.forEach(l => console.log(l)); buf = []; }
+function finish(summary) {
+  if (summary && !dirty && !DRY_RUN) { console.log(summary); buf = []; }
+  else flush();
+}
 
 const FORM = {
   accept: '*/*', 'accept-language': 'en-US,en;q=0.9',
@@ -114,90 +126,96 @@ async function cartCount(page) {
   return m ? Number(m[1]) : 0;
 }
 
+// returns how many items were bought
 async function buyBatch(page, adds, pageType, label) {
   if (!adds.length) return 0;
   if (DRY_RUN) {
-    adds.forEach(a => console.log(`🧪 DRY RUN (${label}): would add item ${a.itemId} colour ${a.colour} (${a.price} ${CUR[a.currency]})`));
+    adds.forEach(a => log(`🧪 DRY RUN (${label}): would add item ${a.itemId} colour ${a.colour} (${a.price} ${CUR[a.currency]})`));
     return 0;
   }
   const before = await cartCount(page);
-  if (before > 0) { console.log(`⚠️ The cart already holds ${before} item(s). Not touching it. Empty the cart in the game, then it will work again.`); return 0; }
+  if (before > 0) { warn(`⚠️ The cart already holds ${before} item(s). Not touching it. Empty the cart in the game, then it will work again.`); return 0; }
   let added = 0, last = null;
   for (const a of adds) {
     const body = `action=addToCart&mallType=1&itemId=${a.itemId}&itemCategoryId=${a.category}&itemCollectionId=${a.collectionId}` +
       `&itemColor=${a.colour}&pageNum=${a.pageNum}&collectionsPage=${pageType}&orderBy=${a.orderBy || ''}&orderType=${a.orderType || ''}`;
     const j = await postJson(page, '/ajax/mall/cart.php', body);
-    if (j && j.status === 1) { added++; last = j; console.log(`🛒 (${label}) added item ${a.itemId} colour ${a.colour} (${a.price} ${CUR[a.currency]})`); }
-    else console.log(`⚠️ (${label}) could not add item ${a.itemId} colour ${a.colour}: ${safe(j)}`);
+    if (j && j.status === 1) { added++; last = j; log(`🛒 (${label}) added item ${a.itemId} colour ${a.colour} (${a.price} ${CUR[a.currency]})`); }
+    else warn(`⚠️ (${label}) could not add item ${a.itemId} colour ${a.colour}: ${safe(j)}`);
     await sleep(1500 + Math.floor(Math.random() * 1500));
   }
   if (!added) return 0;
   if (!last || Number(last.total_items_in_cart) !== added) {
-    console.log(`⚠️ The cart total (${last && last.total_items_in_cart}) does not match what was added (${added}). Not checking out. Empty the cart in the game.`);
+    warn(`⚠️ The cart total (${last && last.total_items_in_cart}) does not match what was added (${added}). Not checking out. Empty the cart in the game.`);
     return 0;
   }
   await postJson(page, '/ajax/mall/cart.php', 'action=loadMallContent');
   const r = await postJson(page, '/ajax/mall/cart.php', `action=checkoutCart&collectionsPage=${pageType}`);
   if (r && r.status === 1) {
     const s = r.lady_stats || {};
-    console.log(`✅ (${label}) bought ${added} item(s). Left: ${s.dollars} dollars, ${s.emeralds} emeralds, ${s.credits} diamonds.`);
+    log(`✅ (${label}) bought ${added} item(s). Left: ${s.dollars} dollars, ${s.emeralds} emeralds, ${s.credits} diamonds.`);
     return added;
   }
-  console.log(`❌ (${label}) checkout failed: ${safe(r)}. The cart still holds the items; empty it in the game.`);
+  warn(`❌ (${label}) checkout failed: ${safe(r)}. The cart still holds the items; empty it in the game.`);
   return 0;
 }
 
-module.exports = async function runOutfitBuyer(page) {
-  console.log(DRY_RUN ? '🛍️ Outfit buyer (DRY RUN)' : '🛍️ Outfit buyer');
+// returns a success summary string, or null when it is not a clean success
+async function run(page) {
+  log(DRY_RUN ? '🛍️ Outfit buyer (DRY RUN)' : '🛍️ Outfit buyer');
 
   const html = await getText(page, '/wardrobe.php?wardrobetype=lady&archive=0&category_id%5B0%5D=9');
   const lm = html.match(/var LADY_ID = '(\d+)'/);
   const ladyId = lm ? lm[1] : null;
   const cm = html.match(/var currentTime = new Date\('([^']+)'\)/);
-  if (!cm) { console.log('❌ Could not read the server clock. Doing nothing.'); return; }
+  if (!cm) { warn('❌ Could not read the server clock. Doing nothing.'); return null; }
   const d = new Date(cm[1]);
   const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  console.log(`🪪 Lady ID ${ladyId} | 🕒 Server ${today} ${pad(d.getHours())}:${pad(d.getMinutes())}`);
+  log(`🪪 Lady ID ${ladyId} | 🕒 Server ${today} ${pad(d.getHours())}:${pad(d.getMinutes())}`);
 
-  if (ladyId === MAIN_LADY_ID) { console.log('⏭️ This is the main account. Nothing to buy.'); return; }
-  if (d.getHours() < 12) { console.log('🌅 Morning phase. Buying only happens in the evening.'); return; }
-  if (!process.env.BOARD_URL || !process.env.BOARD_PASSWORD) { console.log('⚠️ BOARD_URL / BOARD_PASSWORD are not set. Nothing to do.'); return; }
+  if (ladyId === MAIN_LADY_ID) { log('⏭️ This is the main account. Nothing to buy.'); return '✅ Outfit buyer: main account, nothing to buy.'; }
+  if (d.getHours() < 12) { log('🌅 Morning phase. Buying only happens in the evening.'); return '✅ Outfit buyer: morning phase, nothing to do.'; }
+  if (!process.env.BOARD_URL || !process.env.BOARD_PASSWORD) { warn('⚠️ BOARD_URL / BOARD_PASSWORD are not set. Nothing to do.'); return null; }
 
   const rec = await boardRead();
-  if (!rec) { console.log('ℹ️ The board is empty.'); return; }
-  console.log(`📋 Board record: game date ${rec.gameDate}, dress up: ${rec.dressUp}`);
-  if (rec.gameDate !== today) { console.log(`ℹ️ The record is for ${rec.gameDate}, today is ${today}. Too old, buying nothing.`); return; }
+  if (!rec) { warn('ℹ️ The board is empty.'); return null; }
+  log(`📋 Board record: game date ${rec.gameDate}, dress up: ${rec.dressUp}`);
+  if (rec.gameDate !== today) { warn(`ℹ️ The record is for ${rec.gameDate}, today is ${today}. Too old, buying nothing.`); return null; }
 
   let { tiles, freeSlot } = await readHeader(page, html);
   const stats = await readStats(page);
-  console.log(`💰 ${stats.dollars} dollars, ${stats.emeralds} emeralds, ${stats.diamonds} diamonds (diamond cap this run: ${DIAMOND_CAP}) | level ${stats.level}`);
-  console.log(`🗂️ Active here: ${tiles.map(t => `${t.name} (${t.id}, ${t.flashback ? 'FLASHBACK' : 'LIVE'})`).join(' | ') || 'none'} | free flashback slot: ${freeSlot}`);
+  log(`💰 ${stats.dollars} dollars, ${stats.emeralds} emeralds, ${stats.diamonds} diamonds (diamond cap this run: ${DIAMOND_CAP}) | level ${stats.level}`);
+  log(`🗂️ Active here: ${tiles.map(t => `${t.name} (${t.id}, ${t.flashback ? 'FLASHBACK' : 'LIVE'})`).join(' | ') || 'none'} | free flashback slot: ${freeSlot}`);
   const left = { 1: stats.dollars, 2: stats.emeralds, 3: Math.min(stats.diamonds, DIAMOND_CAP) };
   const afford = (a) => { if (a.price <= left[a.currency]) { left[a.currency] -= a.price; return true; }
-    console.log(`⏭️ Cannot afford item ${a.itemId} colour ${a.colour} (${a.price} ${CUR[a.currency]}, ${left[a.currency]} left to spend). Skipped.`); return false; };
+    warn(`⏭️ Cannot afford item ${a.itemId} colour ${a.colour} (${a.price} ${CUR[a.currency]}, ${left[a.currency]} left to spend). Skipped.`); return false; };
+
+  let boughtCollection = 0, boughtMall = 0;
+  const unlocked = [];
 
   // ---------------- collections
   for (const c of (rec.collections || [])) {
-    if (!c.owned || c.owned.length === 0) { console.log(`📦 ${c.name}: main owns nothing from it. Skipping.`); continue; }
+    if (!c.owned || c.owned.length === 0) { log(`📦 ${c.name}: main owns nothing from it. Skipping.`); continue; }
     let tile = tiles.find(t => t.id === c.id);
     if (!tile) {
-      if (c.kind !== 'flashback') { console.log(`⏭️ ${c.name} (live) is not active on this account. Skipping.`); continue; }
-      if (tiles.some(t => t.flashback)) { console.log(`⏭️ ${c.name}: another flashback collection is already active here. Not unlocking a second one.`); continue; }
-      if (!freeSlot) { console.log(`⏭️ ${c.name}: no free flashback slot on this account. Not unlocking.`); continue; }
-      if (!ALLOW_UNLOCK) { console.log(`⏭️ ${c.name}: would unlock it (free slot available), but unlocking is switched off (ALLOW_UNLOCK is not 1).`); continue; }
-      if (DRY_RUN) { console.log(`🧪 DRY RUN: would unlock ${c.name} (${c.id}) now.`); continue; }
+      if (c.kind !== 'flashback') { log(`⏭️ ${c.name} (live) is not active on this account. Skipping.`); continue; }
+      if (tiles.some(t => t.flashback)) { log(`⏭️ ${c.name}: another flashback collection is already active here. Not unlocking a second one.`); continue; }
+      if (!freeSlot) { log(`⏭️ ${c.name}: no free flashback slot on this account. Not unlocking.`); continue; }
+      if (!ALLOW_UNLOCK) { warn(`⏭️ ${c.name}: would unlock it (free slot available), but unlocking is switched off (ALLOW_UNLOCK is not 1).`); continue; }
+      if (DRY_RUN) { log(`🧪 DRY RUN: would unlock ${c.name} (${c.id}) now.`); continue; }
       const u = await postJson(page, '/ajax/mall/boutique.php', `action=unlockCollection&collectionId=${c.id}`);
-      console.log(`🔓 Unlock reply: ${safe(u)}`);
+      log(`🔓 Unlock reply: ${safe(u)}`);
       await sleep(3000);
       ({ tiles, freeSlot } = await readHeader(page, await getText(page, '/wardrobe.php?wardrobetype=lady&archive=0&category_id%5B0%5D=9')));
       tile = tiles.find(t => t.id === c.id);
-      if (!tile) { console.log(`❌ ${c.name} is still not active after the unlock. Stopping here for this collection.`); continue; }
-      console.log(`✅ ${c.name} is now active on this account.`);
+      if (!tile) { warn(`❌ ${c.name} is still not active after the unlock. Stopping here for this collection.`); continue; }
+      log(`✅ ${c.name} is now active on this account.`);
+      unlocked.push(c.name);
     }
 
     const mine = await ownedMap(page, `empty_filter=false&default_category=false&store_id%5B%5D=${c.id}`);
     const o = grab(await getText(page, tile.href), 'setMallOptions(', '{', '}');
-    if (!o) { console.log(`⚠️ ${c.name}: could not read the collection page.`); continue; }
+    if (!o) { warn(`⚠️ ${c.name}: could not read the collection page.`); continue; }
     const byId = {};
     Object.entries(o.pagination.itemsOnPages || {}).forEach(([pg, arr]) => arr.forEach(i => { byId[i.id] = { ...i, pageNum: Number(pg) }; }));
 
@@ -205,34 +223,55 @@ module.exports = async function runOutfitBuyer(page) {
     for (const r of c.owned) for (const colour of r.colours) {
       if (mine[r.itemId] && mine[r.itemId].has(colour)) continue;                 // already owned
       const it = byId[r.itemId];
-      if (!it) { console.log(`⏭️ ${c.name}: item ${r.itemId} is not in this account's listing. Skipped.`); continue; }
-      if (!(it.colors || []).map(Number).includes(colour)) { console.log(`⏭️ ${c.name}: item ${r.itemId} colour ${colour} is not available. Skipped.`); continue; }
-      if (it.can_buy !== 1) { console.log(`⏭️ ${c.name}: item ${r.itemId} cannot be bought here. Skipped.`); continue; }
+      if (!it) { warn(`⏭️ ${c.name}: item ${r.itemId} is not in this account's listing. Skipped.`); continue; }
+      if (!(it.colors || []).map(Number).includes(colour)) { warn(`⏭️ ${c.name}: item ${r.itemId} colour ${colour} is not available. Skipped.`); continue; }
+      if (it.can_buy !== 1) { warn(`⏭️ ${c.name}: item ${r.itemId} cannot be bought here. Skipped.`); continue; }
       const a = { itemId: it.id, category: it.type, collectionId: it.store_id, colour, pageNum: it.pageNum, price: it.price, currency: it.currency };
       if (afford(a)) adds.push(a);
     }
-    console.log(`📦 ${c.name}: ${adds.length} item colour(s) to buy.`);
-    await buyBatch(page, adds, 'limited', c.name);
+    log(`📦 ${c.name}: ${adds.length} item colour(s) to buy.`);
+    boughtCollection += await buyBatch(page, adds, 'limited', c.name);
     await sleep(1000);
   }
 
   // ---------------- mall pieces from the look
-  if (!rec.dressUp) { console.log('ℹ️ The record says no dress up, so no mall pieces are needed.'); return; }
+  const summary = () => {
+    const parts = [];
+    if (unlocked.length) parts.push(`unlocked ${unlocked.join(', ')}`);
+    if (boughtCollection) parts.push(`bought ${boughtCollection} collection item(s)`);
+    if (boughtMall) parts.push(`bought ${boughtMall} mall item(s)`);
+    return `✅ Outfit buyer: ${parts.length ? parts.join(', ') : 'nothing to buy'}.`;
+  };
+  if (!rec.dressUp) { log('ℹ️ The record says no dress up, so no mall pieces are needed.'); return summary(); }
   const adds = [];
   for (const l of (rec.look || []).filter(x => x.kind === 'mall')) {
     const own = await ownedMap(page, `category_id%5B%5D=${l.category}`);
-    if (own[l.itemId] && own[l.itemId].has(l.colour)) { console.log(`🛍️ Mall item ${l.itemId} colour ${l.colour}: already owned.`); continue; }
+    if (own[l.itemId] && own[l.itemId].has(l.colour)) { log(`🛍️ Mall item ${l.itemId} colour ${l.colour}: already owned.`); continue; }
     const mo = grab(await getText(page, `/mall/mall.php?action=loadMallContent&mallType=1&nextLevelItems=false&categoryId=${l.category}`), 'setMallOptions(', '{', '}');
     let found = null;
     if (mo) for (const [pg, arr] of Object.entries(mo.pagination.itemsOnPages || {})) { const it = arr.find(x => x.id === l.itemId); if (it) { found = { ...it, pageNum: Number(pg) }; break; } }
-    if (!found) { console.log(`⏭️ Mall item ${l.itemId}: not in this account's mall listing (maybe a higher level is needed). Skipped.`); continue; }
-    if (found.min_level > stats.level || found.can_buy !== 1) { console.log(`⏭️ Mall item ${l.itemId}: needs level ${found.min_level} or cannot be bought (this account is level ${stats.level}). Skipped.`); continue; }
-    if (!(found.colors || []).map(Number).includes(l.colour)) { console.log(`⏭️ Mall item ${l.itemId}: colour ${l.colour} is not available. Skipped.`); continue; }
+    if (!found) { warn(`⏭️ Mall item ${l.itemId}: not in this account's mall listing (maybe a higher level is needed). Skipped.`); continue; }
+    if (found.min_level > stats.level || found.can_buy !== 1) { warn(`⏭️ Mall item ${l.itemId}: needs level ${found.min_level} or cannot be bought (this account is level ${stats.level}). Skipped.`); continue; }
+    if (!(found.colors || []).map(Number).includes(l.colour)) { warn(`⏭️ Mall item ${l.itemId}: colour ${l.colour} is not available. Skipped.`); continue; }
     const a = { itemId: found.id, category: found.type, collectionId: found.store_id, colour: l.colour, pageNum: found.pageNum,
       price: found.price, currency: found.currency, orderBy: (mo.orderItems && mo.orderItems.by) || 'id', orderType: (mo.orderItems && mo.orderItems.type) || 'desc' };
     if (afford(a)) adds.push(a);
     await sleep(500);
   }
-  console.log(`🛍️ Mall: ${adds.length} item(s) to buy.`);
-  await buyBatch(page, adds, 'false', 'mall');
+  log(`🛍️ Mall: ${adds.length} item(s) to buy.`);
+  boughtMall += await buyBatch(page, adds, 'false', 'mall');
+  return summary();
+}
+
+// ---------------------------------------------------------------- entry point
+module.exports = async function runOutfitBuyer(page) {
+  buf = [];
+  dirty = false;
+  try {
+    const summary = await run(page);
+    finish(summary);
+  } catch (e) {
+    flush();            // show everything that happened before the error
+    throw e;            // the launcher prints the ❌ line
+  }
 };
