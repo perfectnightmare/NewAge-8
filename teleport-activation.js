@@ -739,7 +739,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
 
     // ==============================================================
-    // RANDOMLY CHOOSE ONE UNLOCKED EVENT
+    // CHOOSE THE FIRST UNLOCKED EVENT
     // ==============================================================
 
     const selectedEvent = unlockedEvents[0];
@@ -939,9 +939,33 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
   }
 
+  // Priority order of final reward types (best first). Anything not listed ranks last.
+  const FINAL_PRIORITY = [
+    'clothes',               // 1) any clothing item
+    'appearance',            // 2) lady appearance
+    'pet',                   // 3)
+    'car',                   // 4)
+    'background',            // 5)
+    'boyfriend_clothes',     // 6)
+    'boyfriend_appearance'   // 7)
+  ];
+
   const uncompletedZones = zonesInfo
     .filter(z => z.is_completed === false)
-    .map(z => ({ id: z.id, name: z.name }));
+    .map(z => {
+      const f = z.rewards && z.rewards.final;
+      const finals = Array.isArray(f) ? f : (f ? [f] : []);
+
+      // best (lowest) rank among this zone's final rewards
+      let rank = FINAL_PRIORITY.length;
+      let finalType = 'none';
+      for (const x of finals) {
+        const r = FINAL_PRIORITY.indexOf(x && x.type);
+        if (r !== -1 && r < rank) { rank = r; finalType = x.type; }
+      }
+
+      return { id: z.id, name: z.name, rank, finalType };
+    });
 
   console.log(
     `🗺️ [Step 3.2] Found ${uncompletedZones.length} uncompleted zone(s): ` +
@@ -957,10 +981,16 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
 
   // ----------------------------------------------------------------
-  // STEP 4 — Activate a random uncompleted zone
+  // STEP 4 — Activate the best-ranked uncompleted zone
   // ----------------------------------------------------------------
 
-  const chosenZone = uncompletedZones[0];
+  // lowest rank wins; ties keep the game's list order (so the first zone is the fallback)
+  const chosenZone = uncompletedZones.reduce(
+    (best, z) => (z.rank < best.rank ? z : best),
+    uncompletedZones[0]
+  );
+
+  console.log(`📊 [Step 4] Chosen zone's final reward type: ${chosenZone.finalType} (rank ${chosenZone.rank + 1})`);
 
   console.log(
     `🎯 [Step 4] Activating zone: ${chosenZone.name} (ID ${chosenZone.id})`
