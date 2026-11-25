@@ -30,6 +30,7 @@ const runGuildAttack = require('./guild-attack.js');
 const runBattlePassChests = require('./battlepass-chests.js');
 const runNewAccount = require('./new-account.js');
 const runAccountInfo = require('./account-info.js');
+const runTeleportLive = require('./tele-live.js');
 
 const scripts = [
 
@@ -64,6 +65,7 @@ const scripts = [
   { name: 'Apartment Income', fn: runApartment, alwaysRun: true },
   //{ name: 'Gifts Flashback', fn: runGifts, alwaysRun: false },
   { name: 'Teleport Activation', fn: runTeleport, alwaysRun: true },
+  { name: 'Teleport Live', fn: runTeleportLive, alwaysRun: true },
   { name: 'Furniture Script', fn: runFurnitureScript, alwaysRun: false },
   { name: 'Raise stats', fn: runDuelFP, alwaysRun: true }, //raises stats if +200
   //{ name: 'Battle Pass Chests', fn: runBattlePassChests, alwaysRun: false }, //opens chests
