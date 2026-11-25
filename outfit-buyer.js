@@ -11,6 +11,7 @@ const DRY_RUN = process.env.OUTFIT_DRY_RUN === '1';
 const ALLOW_UNLOCK = process.env.ALLOW_UNLOCK === '1';
 const MAIN_LADY_ID = String(process.env.MAIN_LADY_ID || '8859158');
 const DIAMOND_CAP = Number(process.env.DIAMOND_CAP || 60);
+const MAX_WARDROBE_PAGES = 100;   // pages per wardrobe list (about 18 items per page)
 const CUR = { 1: 'dollars', 2: 'emeralds', 3: 'diamonds' };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const pad = (n) => String(n).padStart(2, '0');
@@ -102,7 +103,7 @@ async function readStats(page) {
 async function ownedMap(page, filter) {
   const re = /\$\('#item-(\d+)'\)\.data\('item',\s*(\{[^\n]*?\})\);/g;
   const map = {};
-  for (let p = 1; p <= 10; p++) {
+  for (let p = 1; p <= MAX_WARDROBE_PAGES; p++) {
     const j = await postJson(page, '/ajax/wardrobe.php',
       `wardrobetype=lady&archive=0&pet=0&${filter}&page=${p}&currentPageNum=${p}&updatePartials%5B%5D=10&updatePartials%5B%5D=3`);
     const html = j && j.partials && j.partials.partial3;

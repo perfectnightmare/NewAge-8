@@ -2,7 +2,9 @@
 // MORNING (server time before noon): every account switches to its own saved F1/F2/F3 outfit.
 // EVENING (noon to midnight): follower accounts (never main) copy main's look from the board,
 // only if the record is for today, says "dress up", and the account owns every piece (event items included).
-// Makeup is never changed (it is read from the account itself).
+// MAKEUP: copied too (through the beauty salon save), but only if the clothes check passed AND every makeup item
+// (hair included) is already available to this account in the salon (no purchases ever).
+// Otherwise the account keeps its own makeup.
 // OUTFIT_DRY_RUN=1 logs what it WOULD do without changing anything.
 // Console output: one line on success; the full log only when something is not a clean success.
 
@@ -11,6 +13,8 @@ const DEFAULT_NAMES = ['f1', 'f2', 'f3'];
 const EVENING_FROM_HOUR = 12;
 const DRY_RUN = process.env.OUTFIT_DRY_RUN === '1';
 const MAIN_LADY_ID = String(process.env.MAIN_LADY_ID || '8859158');
+const SALON = '/ajax/beauty_salon_lady.php';
+const MAX_WARDROBE_PAGES = 100;   // pages per wardrobe category (about 18 items per page)
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const pad = (n) => String(n).padStart(2, '0');
 
@@ -30,10 +34,11 @@ const HEADERS = {
   'x-requested-with': 'XMLHttpRequest',
   referer: `${BASE}/wardrobe.php?wardrobetype=lady&archive=0&category_id%5B0%5D=9`
 };
+const SALON_HEADERS = { ...HEADERS, referer: `${BASE}/beauty_salon.php` };
 
 // ---------------------------------------------------------------- helpers
-async function postBody(page, path, body) {
-  const res = await page.request.post(BASE + path, { headers: HEADERS, data: body });
+async function postBody(page, path, body, headers) {
+  const res = await page.request.post(BASE + path, { headers: headers || HEADERS, data: body });
   if (!res.ok()) throw new Error(`POST ${path} returned HTTP ${res.status()}`);
   const t = await res.text();
   try { return JSON.parse(t); } catch (e) { throw new Error(`${path} gave non-JSON: ${t.slice(0, 150)}`); }
@@ -154,20 +159,63 @@ async function readLook(page) {
   };
 }
 
-function appearanceBody(app) {
-  const entries = Object.values(app).map(o => o && o.data).filter(Boolean);
+// ---- makeup helpers
+// the game's appearance object -> list of { type, num, color, size? }
+function appearanceEntries(app) {
+  return Object.values(app).map(o => o && o.data).filter(Boolean).map(d => {
+    const e = { type: Number(d.type), num: Number(d.num), color: Number(d.color) };
+    if (d.size !== undefined) e.size = Number(d.size);
+    return e;
+  });
+}
+function makeupBody(entries) {
   return entries.map((d, i) => {
     let s = `appearance%5B${i}%5D%5Btype%5D=${d.type}&appearance%5B${i}%5D%5Bnum%5D=${d.num}&appearance%5B${i}%5D%5Bcolor%5D=${d.color}`;
     if (d.size !== undefined) s += `&appearance%5B${i}%5D%5Bsize%5D=${d.size}`;
     return s;
   }).join('&');
 }
+const entryKey = (d) => `${Number(d.type)}:${Number(d.num)}:${Number(d.color)}:${d.size === undefined ? '' : Number(d.size)}`;
+const keysOf = (entries) => entries.map(entryKey).sort().join(',');
+
+// every item of one salon category (the category id is the item type), following the pages
+async function salonItems(page, type) {
+  const items = [];
+  for (let p = 1; p <= 30; p++) {
+    const j = await postBody(page, SALON,
+      `type=getItemsByFilter&page=${p}&category_id%5B%5D=${type}&archive=0&default_category=0`, SALON_HEADERS);
+    if (!j || j.status !== 1 || !Array.isArray(j.items)) throw new Error(`salon list for category ${type} failed`);
+    items.push(...j.items);
+    if (!j.hasMore) break;
+    await sleep(300);
+  }
+  return items;
+}
+
+// returns a list of problems; an empty list means every makeup item is available here without buying anything
+async function checkMakeup(page, wanted, current) {
+  const wearing = new Set(current.map(entryKey));
+  const cache = {};
+  const problems = [];
+  for (const d of wanted) {
+    if (wearing.has(entryKey(d))) continue;          // already wearing exactly this, so it is owned
+    if (!cache[d.type]) { cache[d.type] = await salonItems(page, d.type); await sleep(300); }
+    const it = cache[d.type].find(x => Number(x.type) === d.type && Number(x.num) === d.num);
+    if (!it) problems.push(`type ${d.type} item ${d.num} is not in the salon list`);
+    else if (Number(it.unlocked) !== 1) problems.push(`type ${d.type} item ${d.num} is not owned`);
+    // colour check only for items with a real choice of colours (body and nose have a single entry in their list)
+    else if (Array.isArray(it.colors) && it.colors.length > 1 && !it.colors.map(Number).includes(d.color)) {
+      problems.push(`type ${d.type} item ${d.num} colour ${d.color} is not available`);
+    }
+  }
+  return problems;
+}
 
 // itemId -> { colour -> row id } for everything this account owns in one category
 async function ownedRows(page, cat) {
   const re = /\$\('#item-(\d+)'\)\.data\('item',\s*(\{[^\n]*?\})\);/g;
   const map = {};
-  for (let p = 1; p <= 10; p++) {
+  for (let p = 1; p <= MAX_WARDROBE_PAGES; p++) {
     const j = await postBody(page, '/ajax/wardrobe.php',
       `wardrobetype=lady&category_id%5B%5D=${cat}&archive=0&pet=0&page=${p}&currentPageNum=${p}&updatePartials%5B%5D=10&updatePartials%5B%5D=3`);
     const html = j && j.partials && j.partials.partial3;
@@ -212,28 +260,82 @@ async function dressFromBoard(page, clock) {
   }
   if (missing.length) {
     log(`⏭️ Missing ${missing.length} piece(s). Staying in the default outfit: ${missing.map(m => `${m.itemId}/colour ${m.colour} (${m.kind})`).join(', ')}`);
-    return null;
+    return null;   // no clothes change means no makeup change either
   }
 
   const mine = await readLook(page);
   if (!mine.appearance) { log('⚠️ Could not read this account\'s own makeup. Staying in the default outfit.'); return null; }
+  const myEntries = appearanceEntries(mine.appearance);
+
+  // ---- makeup: decide whether main's makeup can be copied (every item already available, nothing bought)
+  let copyMakeup = false;
+  let makeupNote;
+  const wanted = Array.isArray(rec.appearance) ? rec.appearance.map(d => {
+    const e = { type: Number(d.type), num: Number(d.num), color: Number(d.color) };
+    if (d.size !== undefined && d.size !== null) e.size = Number(d.size);
+    return e;
+  }) : [];
+  const makeupAlreadyOn = wanted.length > 0 && keysOf(wanted) === keysOf(myEntries);
+  if (wanted.length === 0) {
+    log('💄 The record has no makeup. Keeping this account\'s own makeup.');
+    makeupNote = 'makeup kept (none published)';
+  } else if (makeupAlreadyOn) {
+    log('💄 The makeup is already main\'s.');
+    makeupNote = 'makeup already main\'s';
+  } else {
+    let problems;
+    try { problems = await checkMakeup(page, wanted, myEntries); }
+    catch (e) { problems = [`could not check the salon (${e.message})`]; }
+    if (problems.length) {
+      log(`💄 Makeup not copied, keeping its own. Problems: ${problems.join('; ')}`);
+      makeupNote = `makeup kept (${problems.join('; ')})`;
+    } else {
+      copyMakeup = true;
+      log(`💄 Every makeup item is available (${wanted.length} entries). Main's makeup will be copied through the salon.`);
+      makeupNote = 'makeup copied';
+    }
+  }
+
+  // ---- 1) clothes (the game's look save ignores makeup changes, so this keeps the account's own makeup)
   const items = rows.map((r, i) => `items%5B${i}%5D%5Bid%5D=${r.id}&items%5B${i}%5D%5Boffset%5D=${r.layer}`).join('&');
-  const body = `action=saveChanges&selectedPet=&${items}&${appearanceBody(mine.appearance)}`;
-  if (DRY_RUN) { log('🧪 DRY RUN: the account owns every piece. Would save the look now. Nothing changed.'); return null; }
+  const body = `action=saveChanges&selectedPet=&${items}&${makeupBody(myEntries)}`;
+  if (DRY_RUN) { log(`🧪 DRY RUN: the account owns every piece. Would save the clothes now, then: ${makeupNote}. Nothing changed.`); return null; }
 
   const r = await postBody(page, '/ajax/wardrobe/lady.php', body);
   const noChange = r && r.status === 0 && /no changes made/i.test(String(r.message || ''));
-  if (noChange) log('ℹ️ The game says "No changes made", so the look is already on.');
+  if (noChange) log('ℹ️ The game says "No changes made", so the clothes are already on.');
   else if (!r || r.status !== 1) throw new Error(`saveChanges failed: ${JSON.stringify(r).slice(0, 300)}`);
+
+  // ---- 2) makeup, through the beauty salon save
+  if (copyMakeup) {
+    await sleep(800);
+    const s = await postBody(page, SALON, `type=save&${makeupBody(wanted)}`, SALON_HEADERS);
+    if (!s || s.status !== 1) {
+      log(`⚠️ The salon did not accept the makeup: ${JSON.stringify(s).slice(0, 300)}`);
+      makeupNote = 'makeup kept (the salon save failed)';
+      copyMakeup = false;
+    } else {
+      log('💄 Salon save accepted.');
+    }
+  }
+
+  // ---- 3) read everything back and confirm
   const after = await readLook(page);
   const want = look.map(l => `${l.itemId}:${l.colour}`).sort().join(',');
   const got = after.worn.map(w => `${w.itemId}:${w.colour}`).sort().join(',');
-  if (want === got) {
-    log(`✅ Look saved and confirmed (${look.length} pieces).`);
-    return `✅ Outfit follower: ${noChange ? 'look already on' : 'look copied'} and confirmed (${look.length} pieces).`;
+  if (want !== got) {
+    log(`⚠️ Look saved, but what is worn now differs from the record. Wanted ${want}, got ${got}.`);
+    return null;
   }
-  log(`⚠️ Look saved, but what is worn now differs from the record. Wanted ${want}, got ${got}.`);
-  return null;
+  if (copyMakeup) {
+    const gotMakeup = after.appearance ? keysOf(appearanceEntries(after.appearance)) : '';
+    if (gotMakeup !== keysOf(wanted)) {
+      log(`⚠️ Clothes are on, but the makeup differs from main's after the salon save. Wanted ${keysOf(wanted)}, got ${gotMakeup}.`);
+      return null;
+    }
+  }
+  log(`✅ Look saved and confirmed (${look.length} pieces), ${makeupNote}.`);
+  return `✅ Outfit follower: ${noChange ? 'look already on' : 'look copied'} and confirmed (${look.length} pieces), ${makeupNote}.`;
 }
 
 // ---------------------------------------------------------------- entry point
