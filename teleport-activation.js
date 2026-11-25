@@ -281,23 +281,48 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 }`;
 
 
+  // Opens one grid cell (copied from your click capture, trimmed to the fields we use).
+  const OPEN_GRID_BOX_MUTATION = `mutation EventTeleportOpenGridBox($eventId: Int, $zoneId: Int, $positionX: Int, $positionY: Int) {
+  teleport {
+    OpenGridBoxMutation(
+      eventId: $eventId
+      zoneId: $zoneId
+      positionX: $positionX
+      positionY: $positionY
+    ) {
+      status
+      message
+      lady_stats {
+        emeralds
+        credits
+      }
+      zone_info {
+        id
+        map {
+          flag
+          pending
+          is_opened
+        }
+        open_square_info {
+          emerald_tries_amount
+        }
+        is_completed
+      }
+    }
+  }
+}`;
+
+
   // ==============================================================
-  // 🎮 STEP 5 PLAY LOGIC (your tele.js click engine, verbatim)
-  // ==============================================================
-  //
-  // Kept as a small internal helper purely because it's a big
-  // block of grid-solving logic — it is only ever called ONCE,
-  // at the very end of this file's single linear flow.
+  // 🎮 STEP 5 PLAY LOGIC
+  // Your solver, unchanged, now fed by the game's own grid data and
+  // clicking through requests instead of real mouse clicks.
   // ==============================================================
 
   async function playTeleportGame(teleportUrl) {
 
     console.log("🌐 Navigating to teleport event page...");
     await page.goto(teleportUrl, { waitUntil: 'domcontentloaded' });
-
-    console.log('🔄 Refresh & wait...');
-    await page.reload();
-    await page.waitForTimeout(30000);
 
     const emeraldText = await page.textContent('#player-emeralds');
     const emeralds = parseInt(emeraldText.replace(/\D/g, ''), 10);
@@ -307,12 +332,71 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
       return;
     }
 
-    let tries = await page.$$eval('div.currency-tries > span.currency-circle-full', els => els.length);
+    // ---- read the current zone state from the game
+    const stateResponse = await runGraphQL({
+      operationName: 'Teleport',
+      query: TELEPORT_EVENT_INFO_QUERY,
+      variables: { eventId }
+    });
+    const zoneInfo = stateResponse?.data?.teleport?.EventInfo?.zone_info;
+    if (stateResponse?.errors || !zoneInfo || !Array.isArray(zoneInfo.map)) {
+      throw new Error('Could not read the zone state from the game.');
+    }
+
+    const zoneId = zoneInfo.id;
+    let currentMap = zoneInfo.map;
+    let tries = Number(zoneInfo.open_square_info?.emerald_tries_amount);
+    if (!Number.isFinite(tries)) throw new Error('Could not read the number of tries.');
+
     console.log('🎲 Initial tries:', tries);
     if (tries === 0) {
       console.log('➡️ No tries available. Exiting teleport script.');
       return;
     }
+
+    // ---- translate the game's grid into your own cell types
+    // game flag: 4 untouched | 2 hint | 1 reward | 0 empty | 3 block (miss)
+    const FLAG_TYPE = { 4: 'untouched', 2: 'hint', 1: 'reward', 0: 'empty', 3: 'block' };
+
+    const mapToGrid = (map) => {
+      if (map.length !== 10 || map.some(row => row.length !== 10)) {
+        throw new Error('Unexpected grid size (expected 10 x 10).');
+      }
+      const cells = [];
+      map.forEach((row, i) => row.forEach((cell, j) => {
+        const t = FLAG_TYPE[cell.flag];
+        if (!t) throw new Error(`Unknown cell flag ${cell.flag} at row ${i + 1}, column ${j + 1}.`);
+        cells.push({ idx: i * 10 + j + 1, type: t });
+      }));
+      return cells;
+    };
+
+    // ---- click one cell with a request ([row, col] counted from 1, like your code)
+    const openCell = async ([r, c]) => {
+      const res = await runGraphQL({
+        operationName: 'EventTeleportOpenGridBox',
+        query: OPEN_GRID_BOX_MUTATION,
+        variables: { eventId, zoneId, positionX: r - 1, positionY: c - 1 }
+      });
+
+      if (res?.errors) {
+        throw new Error(`Open cell returned errors: ${JSON.stringify(res.errors)}`);
+      }
+
+      const m = res?.data?.teleport?.OpenGridBoxMutation;
+      if (!m || m.status !== 1) {
+        throw new Error(`Open cell failed. Status=${m?.status}, message=${m?.message}`);
+      }
+
+      currentMap = m.zone_info.map;
+      tries = Number(m.zone_info.open_square_info.emerald_tries_amount);
+      if (!Number.isFinite(tries)) throw new Error('Could not read the number of tries after the click.');
+
+      if (m.zone_info.is_completed) {
+        console.log('🏆 Zone completed.');
+        tries = 0;
+      }
+    };
 
     const getIndex = (r, c) => (r - 1) * 10 + c;
     const getCoords = idx => [Math.floor((idx - 1) / 10) + 1, ((idx - 1) % 10) + 1];
@@ -330,17 +414,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
     const randomPick = arr => arr[Math.floor(Math.random() * arr.length)];
 
     while (tries > 0) {
-      const grid = await page.$$eval('div.zone-grid > div > span', spans =>
-        spans.map((sp, i) => {
-          const cls = sp.className;
-          let t = 'untouched';
-          if (cls.includes('opened miss')) t = 'block';
-          else if (cls.includes('opened reward')) t = 'reward';
-          else if (cls.includes('opened empty')) t = 'empty';
-          else if (cls.includes('pending hint')) t = 'hint';
-          return { idx: i + 1, type: t };
-        })
-      );
+      const grid = mapToGrid(currentMap);
 
       const sets = { block: [], reward: [], empty: [], hint: [], untouched: [] };
       grid.forEach(c => {
@@ -375,9 +449,21 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
       let clicked = false;
 
+      // Phase 0: until a blocked cell is found, probe the four standard cells
+      if (blockSet.size === 0) {
+        const probeCells = [[2, 2], [2, 9], [9, 2], [9, 9]]
+          .filter(p => untouchedSet.has(key(p)) || hintSet.has(key(p)));
+        if (probeCells.length > 0) {
+          const tk = randomPick(probeCells);
+          console.log('🔎 Phase 0 probe click:', tk);
+          await openCell(tk);
+          clicked = true;
+        }
+      }
+
       // Phase I: Hint-driven click
       const hintArr = [...hintSet];
-      if (hintArr.length > 0) {
+      if (!clicked && hintArr.length > 0) {
         let minMark = Infinity, hingeList = [];
         hintArr.forEach(hk => {
           const [hr, hc] = hk.split(',').map(Number);
@@ -409,10 +495,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
             }
 
             console.log('🎯 Phase I click:', clickTarget);
-            const idx = getIndex(...clickTarget);
-            await page.click(`.zone-grid > div > span:nth-child(${idx})`);
-            tries--;
-            await page.waitForTimeout(20000);
+            await openCell(clickTarget);
             clicked = true;
           }
         }
@@ -420,19 +503,12 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
       // Phase II: Strategy fallbacks
       if (!clicked && tries > 0) {
-        const progress = await page.textContent('.all-rewards-button-label');
-        const collected = parseInt(progress.split('/')[0].trim());
-        const priority = collected < 12
-          ? [[2, 2], [2, 9], [9, 2], [9, 9]]
-          : [[2, 2], [2, 9], [9, 2], [9, 9]];
+        const priority = [[2, 2], [2, 9], [9, 2], [9, 9]];
         const candidates = priority.filter(p => highProb.has(key(p)));
-        if (candidates.length >= 2) {
+        if (candidates.length >= 1) {
           const tk = randomPick(candidates);
           console.log('🎯 Priority click:', tk);
-          const idx = getIndex(...tk);
-          await page.click(`.zone-grid > div > span:nth-child(${idx})`);
-          tries--;
-          await page.waitForTimeout(20000);
+          await openCell(tk);
           clicked = true;
         }
       }
@@ -449,10 +525,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
         if (bestCount > 0) {
           const tk = randomPick(best).split(',').map(Number);
           console.log('🎯 Overlap-bigblock click:', tk);
-          const idx = getIndex(...tk);
-          await page.click(`.zone-grid > div > span:nth-child(${idx})`);
-          tries--;
-          await page.waitForTimeout(20000);
+          await openCell(tk);
           clicked = true;
         }
       }
@@ -469,22 +542,20 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
         if (bestCount > 0) {
           const tk = randomPick(best).split(',').map(Number);
           console.log('🎯 Overlap-lagging click:', tk);
-          const idx = getIndex(...tk);
-          await page.click(`.zone-grid > div > span:nth-child(${idx})`);
-          tries--;
-          await page.waitForTimeout(20000);
+          await openCell(tk);
           clicked = true;
         }
       }
 
       if (!clicked && tries > 0) {
         const candidates = [...highProb];
+        if (candidates.length === 0) {
+          console.log('⚠️ No clickable cell left. Stopping.');
+          break;
+        }
         const tk = randomPick(candidates).split(',').map(Number);
         console.log('🎯 Fallback click:', tk);
-        const idx = getIndex(...tk);
-        await page.click(`.zone-grid > div > span:nth-child(${idx})`);
-        tries--;
-        await page.waitForTimeout(20000);
+        await openCell(tk);
       }
 
       console.log('➡️ Remaining tries:', tries);
