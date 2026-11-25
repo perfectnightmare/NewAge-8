@@ -6,6 +6,85 @@
 module.exports = async function runTeleport(page) {
 
   // ==============================================================
+  // ⭐ MY FAVOURITES (this is the only block you need to edit)
+  // ==============================================================
+  //
+  // PRIORITY_EVENTS : event ids in the order they should be activated.
+  //                   The first one the game says can be activated wins.
+  //                   If none can be activated, the normal order is used.
+  //
+  // FAVOURITE_ZONES : for an event id, the zone ids to play first, best
+  //                   first. Finished zones are skipped automatically.
+  //                   Works for any event listed here, priority or not.
+  //                   When all favourite zones are done, the normal
+  //                   final-reward ranking (below) takes over.
+  // ==============================================================
+
+  const PRIORITY_EVENTS = [
+    534, 522, 553, 565, 336, 423, 277, 502, 456, 434, 327, 431, 486, 511, 314,
+    230, 402, 266, 387, 244, 239, 340, 346, 363, 361, 376, 290, 284, 192, 95,
+    173, 463, 474, 497, 353, 222
+  ];
+
+  const FAVOURITE_ZONES = {
+    // ---- priority events
+    534: [2218, 2215, 2214, 2216],
+    522: [2145, 2146],
+    553: [2329, 2328],
+    565: [2396, 2397, 2395],
+    336: [146, 145, 144, 148],
+    423: [413, 414, 415, 412, 411],
+    277: [512, 514, 513, 509],
+    502: [2020, 2019, 2018],
+    456: [640, 641, 639, 642],
+    434: [116, 115, 118, 212, 119],
+    327: [474, 476, 479, 478],
+    431: [371, 373, 374],
+    486: [1878, 1877, 1876, 1875],
+    511: [2080, 2078, 2081],
+    314: [491, 489, 488],
+    230: [539, 537],
+    402: [427, 424, 423],
+    266: [521, 516, 519, 522],
+    387: [434, 438, 436],
+    244: [527, 525, 523, 524, 526],
+    239: [531, 534, 535, 533],
+    340: [469, 471],
+    346: [464, 463],
+    363: [448, 447, 446],
+    361: [450, 449],
+    376: [441, 439, 443, 444],
+    290: [743, 740, 739, 741, 745, 742, 744],
+    284: [747, 749],
+    192: [1293, 1290],
+    95:  [1938, 1936, 1937, 1935],
+    173: [1271, 1269],
+    463: [785, 787, 786],
+    474: [1358, 1359, 1360],
+    497: [1998, 2000, 1996],
+    353: [452, 456, 453, 455, 458],
+    222: [612, 613, 611, 609],
+
+    // ---- not priority events, but with favourite zones when they get picked
+    415: [421, 420, 419],
+    397: [433, 429],
+    201: [1299, 1298, 1297, 1296],
+    319: [484],
+    208: [1301, 1304, 1303],
+    307: [495, 501, 498],
+    155: [1255, 1256, 1254],
+    301: [506, 505],
+    296: [736, 735],
+    164: [1266, 1265],
+    216: [1307, 1309, 1311, 1312],
+    543: [2270, 2269]
+  };
+
+  // If activating a priority event is refused, try at most this many before the normal order.
+  const MAX_PRIORITY_ATTEMPTS = 5;
+
+
+  // ==============================================================
   // 🔑 AUTH TOKEN HELPER (for GraphQL requests)
   // ==============================================================
   //
@@ -755,7 +834,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
 
     // ==============================================================
-    // FILTER TELEPORT FLASHBACK EVENTS
+    // FILTER TELEPORT FLASHBACK EVENTS (first page, normal order)
     // ==============================================================
 
     const unlockedEvents = [];
@@ -796,11 +875,123 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
     );
 
 
+    // ==============================================================
+    // ⭐ PRIORITY EVENTS
+    // The game lists only a few events per request, so read ALL pages
+    // and find which of your priority events can be activated now.
+    // If anything goes wrong here, the normal order is used.
+    // ==============================================================
+
+    const priorityCandidates = [];
+
+    if (PRIORITY_EVENTS.length > 0) {
+
+      try {
+
+        const allEvents = await page.evaluate(async () => {
+
+          const out = [];
+          let offset = 0;
+
+          for (let i = 0; i < 30; i++) {
+
+            const response = await fetch(
+              'https://v3.g.ladypopular.com/ajax/events.php',
+              {
+                method: 'POST',
+
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'X-Requested-With': 'XMLHttpRequest'
+                },
+
+                body: new URLSearchParams({
+                  'event_types[]': 'teleport',
+                  'ignore_won_rewards': 'false',
+                  type: 'loadMoreEvents',
+                  offset: String(offset),
+                  name: ''
+                }),
+
+                credentials: 'same-origin'
+              }
+            );
+
+            const j = await response.json();
+            const list = (j.search_events && j.search_events.list) || [];
+
+            list.forEach(e => out.push({
+              id: e.id,
+              title: e.title,
+              is_flashback: e.is_flashback,
+              can_be_activated: e.can_be_activated
+            }));
+
+            if (!(j.search_events && j.search_events.has_more) || !list.length) {
+              break;
+            }
+
+            offset = j.search_events.offset;
+
+            await new Promise(r => setTimeout(r, 500));
+
+          }
+
+          return out;
+
+        });
+
+
+        const activatable = new Map();
+
+        for (const e of allEvents) {
+
+          if (e.is_flashback === true && e.can_be_activated === true) {
+
+            activatable.set(Number(e.id), e.title);
+
+          }
+
+        }
+
+
+        PRIORITY_EVENTS.forEach((id, index) => {
+
+          if (activatable.has(id)) {
+
+            priorityCandidates.push({
+              id,
+              title: activatable.get(id),
+              order: index + 1
+            });
+
+          }
+
+        });
+
+
+        console.log(
+          `⭐ Full event list: ${allEvents.length} teleport events read | ` +
+          `${activatable.size} can be activated | ` +
+          `${priorityCandidates.length} of them are priority events`
+        );
+
+      } catch (error) {
+
+        console.log(
+          `⚠️ Could not read the full event list (${error.message}). Using the normal order.`
+        );
+
+      }
+
+    }
+
+
     // --------------------------------------------------------------
-    // If there are no unlocked events, we cannot activate anything.
+    // If there is nothing to activate at all, stop.
     // --------------------------------------------------------------
 
-    if (unlockedEvents.length === 0) {
+    if (unlockedEvents.length === 0 && priorityCandidates.length === 0) {
 
       console.log('🚀 No unlocked Teleport flashback events. Skipping.');
 
@@ -810,75 +1001,116 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
 
     // ==============================================================
-    // CHOOSE THE FIRST UNLOCKED EVENT
+    // BUILD THE LIST OF EVENTS TO TRY, IN ORDER
+    //   1) priority events that can be activated (best first)
+    //   2) the first unlocked event of the normal order (fallback)
     // ==============================================================
 
-    const selectedEvent = unlockedEvents[0];
+    const candidates = [];
 
+    priorityCandidates.slice(0, MAX_PRIORITY_ATTEMPTS).forEach(c => {
+      candidates.push({
+        id: c.id,
+        title: c.title,
+        why: `priority event, number ${c.order} in your list`
+      });
+    });
 
-    console.log(
-      `🎯 Activating Teleport event: ${selectedEvent.title} (ID ${selectedEvent.id})`
-    );
+    if (
+      unlockedEvents.length > 0 &&
+      !candidates.some(c => Number(c.id) === Number(unlockedEvents[0].id))
+    ) {
 
-
-    // ==============================================================
-    // ACTIVATE EVENT
-    // ==============================================================
-
-    let activationResponse;
-
-
-    try {
-
-      activationResponse = await page.evaluate(async (id) => {
-
-        const response = await fetch(
-          'https://v3.g.ladypopular.com/ajax/events.php',
-          {
-            method: 'POST',
-
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'X-Requested-With': 'XMLHttpRequest'
-            },
-
-            body: new URLSearchParams({
-              type: 'activateEvent',
-              event_id: String(id)
-            }),
-
-            credentials: 'same-origin'
-          }
-        );
-
-        return await response.json();
-
-      }, selectedEvent.id);
-
-
-    } catch (error) {
-
-      console.log(`❌ Teleport event activation request failed: ${error.message}`);
-
-      throw error;
+      candidates.push({
+        id: unlockedEvents[0].id,
+        title: unlockedEvents[0].title,
+        why: 'first unlocked event (normal order)'
+      });
 
     }
 
 
-    if (activationResponse?.status === 1) {
+    // ==============================================================
+    // ACTIVATE EVENT (tries the candidates one by one)
+    // ==============================================================
+
+    let selectedEvent = null;
+    let lastStatus;
+
+
+    for (const cand of candidates) {
 
       console.log(
-        `✅ Teleport flashback activated: ${selectedEvent.title}`
+        `🎯 Activating Teleport event: ${cand.title} (ID ${cand.id}) | reason: ${cand.why}`
       );
 
-    } else {
+
+      let activationResponse;
+
+
+      try {
+
+        activationResponse = await page.evaluate(async (id) => {
+
+          const response = await fetch(
+            'https://v3.g.ladypopular.com/ajax/events.php',
+            {
+              method: 'POST',
+
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+              },
+
+              body: new URLSearchParams({
+                type: 'activateEvent',
+                event_id: String(id)
+              }),
+
+              credentials: 'same-origin'
+            }
+          );
+
+          return await response.json();
+
+        }, cand.id);
+
+
+      } catch (error) {
+
+        console.log(`❌ Teleport event activation request failed: ${error.message}`);
+
+        throw error;
+
+      }
+
+
+      if (activationResponse?.status === 1) {
+
+        console.log(
+          `✅ Teleport flashback activated: ${cand.title}`
+        );
+
+        selectedEvent = cand;
+
+        break;
+
+      }
+
+
+      lastStatus = activationResponse?.status;
 
       console.log(
-        `❌ Teleport event activation failed. Status=${activationResponse?.status}`
+        `❌ Teleport event activation failed. Status=${lastStatus}. Trying the next one, if any.`
       );
+
+    }
+
+
+    if (!selectedEvent) {
 
       throw new Error(
-        `Failed to activate Teleport event "${selectedEvent.title}" (ID ${selectedEvent.id}). Server status: ${activationResponse?.status}`
+        `Failed to activate any Teleport event. Last server status: ${lastStatus}`
       );
 
     }
@@ -1021,6 +1253,9 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
     'boyfriend_appearance'   // 7)
   ];
 
+  // Favourite zones of this event (if any), best first
+  const favOrder = (FAVOURITE_ZONES[eventId] || []).map(Number);
+
   const uncompletedZones = zonesInfo
     .filter(z => z.is_completed === false)
     .map(z => {
@@ -1035,7 +1270,10 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
         if (r !== -1 && r < rank) { rank = r; finalType = x.type; }
       }
 
-      return { id: z.id, name: z.name, rank, finalType };
+      // position in your favourite list for this event (-1 = not a favourite zone)
+      const favIndex = favOrder.indexOf(Number(z.id));
+
+      return { id: z.id, name: z.name, rank, finalType, favIndex };
     });
 
   console.log(
@@ -1052,16 +1290,39 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
 
   // ----------------------------------------------------------------
-  // STEP 4 — Activate the best-ranked uncompleted zone
+  // STEP 4 — Activate the best uncompleted zone
+  //   1) your favourite zones for this event, best first
+  //   2) otherwise the best final-reward rank, ties by game order
+  //   3) otherwise the first zone
   // ----------------------------------------------------------------
 
-  // lowest rank wins; ties keep the game's list order (so the first zone is the fallback)
-  const chosenZone = uncompletedZones.reduce(
-    (best, z) => (z.rank < best.rank ? z : best),
-    uncompletedZones[0]
-  );
+  const favZones = uncompletedZones.filter(z => z.favIndex !== -1);
 
-  console.log(`📊 [Step 4] Chosen zone's final reward type: ${chosenZone.finalType} (rank ${chosenZone.rank + 1})`);
+  let chosenZone;
+
+  if (favZones.length > 0) {
+
+    chosenZone = favZones.reduce(
+      (best, z) => (z.favIndex < best.favIndex ? z : best),
+      favZones[0]
+    );
+
+    console.log(
+      `⭐ [Step 4] Favourite zone picked (position ${chosenZone.favIndex + 1} in your list for this event, ` +
+      `${favZones.length} favourite zone(s) left).`
+    );
+
+  } else {
+
+    // lowest rank wins; ties keep the game's list order (so the first zone is the fallback)
+    chosenZone = uncompletedZones.reduce(
+      (best, z) => (z.rank < best.rank ? z : best),
+      uncompletedZones[0]
+    );
+
+    console.log(`📊 [Step 4] Chosen zone's final reward type: ${chosenZone.finalType} (rank ${chosenZone.rank + 1})`);
+
+  }
 
   console.log(
     `🎯 [Step 4] Activating zone: ${chosenZone.name} (ID ${chosenZone.id})`
