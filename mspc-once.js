@@ -34,6 +34,8 @@ const runAccountInfo = require('./account-info.js');
 const runOutfitFollower = require('./outfit-follower.js'); //reverting back
 const runOutfitBuyer = require('./outfit-buyer.js');
 const runTeleportLive = require('./tele-live.js');
+const runMemoryLive = require('./memory-live.js');
+const runMemoryActivation = require('./memory-activation.js');
 
 const scripts = [
 
@@ -46,6 +48,8 @@ const scripts = [
   { name: 'Furniture Script', fn: runFurnitureScript, alwaysRun: true },
   { name: 'Teleport Activation', fn: runTeleport, alwaysRun: true },
   { name: 'Teleport Live', fn: runTeleportLive, alwaysRun: true },
+  { name: 'Memory Live', fn: runMemoryLive, alwaysRun: true },
+  { name: 'Memory Flashback', fn: runMemoryActivation, alwaysRun: true },
   { name: 'Boyfriend Kiss', fn: runBoyfriendKiss, alwaysRun: true },
   { name: 'Guild Attack', fn: runGuildAttack, alwaysRun: true },
   { name: 'Guild Show', fn: runGuildShow, alwaysRun: true },

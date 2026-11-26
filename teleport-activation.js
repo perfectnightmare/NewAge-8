@@ -670,14 +670,21 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
   // ==============================================================
   // DETECT CURRENTLY ACTIVE FLASHBACK EVENT
+  //   - a TELEPORT flashback banner  → play it
+  //   - a flashback of another type  → do nothing (only one flashback
+  //     can be active for free, so activating now would cost diamonds)
+  //   - no flashback at all          → activate one (free only)
   // ==============================================================
 
   const activeFlashbackElement = page.locator(
-    '#header-events-container .header-event-banner[data-is_flashback="1"]'
+    '#header-events-container .header-event-banner.event-type-teleport[data-is_flashback="1"]'
   ).first();
 
-
   const activeFlashbackEvents = await activeFlashbackElement.count();
+
+  const anyFlashbackCount = await page.locator(
+    '#header-events-container .header-event-banner[data-is_flashback="1"]'
+  ).count();
 
 
   // --------------------------------------------------------------
@@ -694,7 +701,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
   // --------------------------------------------------------------
   // CASE 1
-  // A flashback event is already active.
+  // A TELEPORT flashback event is already active.
   // --------------------------------------------------------------
 
   if (activeFlashbackEvents > 0) {
@@ -715,7 +722,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
     };
 
 
-    console.log('🚀 Flashback event already active.');
+    console.log('🚀 Teleport flashback event already active.');
 
     console.log(
       `📌 Active flashback: ${activeFlashbackEvent.title} (ID ${activeFlashbackEvent.id})`
@@ -724,6 +731,21 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
     console.log('🚀 Skipping Teleport activation. Feeding event ID into Steps 1–5.');
 
     eventId = Number(activeFlashbackEvent.id);
+
+  } else if (anyFlashbackCount > 0) {
+
+
+    // --------------------------------------------------------------
+    // CASE 1b
+    // A flashback of ANOTHER type is active. Activating a teleport
+    // flashback now would cost diamonds, so do nothing.
+    // --------------------------------------------------------------
+
+    console.log(
+      '⏭️ Another flashback event (not teleport) is active. Teleport does nothing, so no diamonds are spent.'
+    );
+
+    return;
 
   } else {
 
@@ -835,6 +857,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
     // ==============================================================
     // FILTER TELEPORT FLASHBACK EVENTS (first page, normal order)
+    // Only events that can be activated AND are a FREE activation.
     // ==============================================================
 
     const unlockedEvents = [];
@@ -850,7 +873,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
       }
 
 
-      if (event.can_be_activated === true) {
+      if (event.can_be_activated === true && event.is_free_activation === true) {
 
         unlockedEvents.push({
           id: event.id,
@@ -871,7 +894,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
 
     console.log(
-      `🚀 Teleport flashbacks found: ${events.length} total | ${unlockedEvents.length} unlocked`
+      `🚀 Teleport flashbacks found: ${events.length} total | ${unlockedEvents.length} free to activate`
     );
 
 
@@ -924,7 +947,8 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
               id: e.id,
               title: e.title,
               is_flashback: e.is_flashback,
-              can_be_activated: e.can_be_activated
+              can_be_activated: e.can_be_activated,
+              is_free_activation: e.is_free_activation
             }));
 
             if (!(j.search_events && j.search_events.has_more) || !list.length) {
@@ -946,7 +970,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
         for (const e of allEvents) {
 
-          if (e.is_flashback === true && e.can_be_activated === true) {
+          if (e.is_flashback === true && e.can_be_activated === true && e.is_free_activation === true) {
 
             activatable.set(Number(e.id), e.title);
 
@@ -972,7 +996,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
         console.log(
           `⭐ Full event list: ${allEvents.length} teleport events read | ` +
-          `${activatable.size} can be activated | ` +
+          `${activatable.size} can be activated for free | ` +
           `${priorityCandidates.length} of them are priority events`
         );
 
@@ -993,7 +1017,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
     if (unlockedEvents.length === 0 && priorityCandidates.length === 0) {
 
-      console.log('🚀 No unlocked Teleport flashback events. Skipping.');
+      console.log('🚀 No free-to-activate Teleport flashback events. Skipping.');
 
       return;
 

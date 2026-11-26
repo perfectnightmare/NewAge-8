@@ -31,6 +31,8 @@ const runBattlePassChests = require('./battlepass-chests.js');
 const runNewAccount = require('./new-account.js');
 const runAccountInfo = require('./account-info.js');
 const runTeleportLive = require('./tele-live.js');
+const runMemoryLive = require('./memory-live.js');
+const runMemoryActivation = require('./memory-activation.js');
 
 const scripts = [
 
@@ -66,6 +68,8 @@ const scripts = [
   //{ name: 'Gifts Flashback', fn: runGifts, alwaysRun: false },
   { name: 'Teleport Activation', fn: runTeleport, alwaysRun: true },
   { name: 'Teleport Live', fn: runTeleportLive, alwaysRun: true },
+  { name: 'Memory Live', fn: runMemoryLive, alwaysRun: true },
+  { name: 'Memory Flashback', fn: runMemoryActivation, alwaysRun: true },
   { name: 'Furniture Script', fn: runFurnitureScript, alwaysRun: true },
   { name: 'Raise stats', fn: runDuelFP, alwaysRun: true }, //raises stats if +200
   //{ name: 'Battle Pass Chests', fn: runBattlePassChests, alwaysRun: false }, //opens chests
