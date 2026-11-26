@@ -9,6 +9,7 @@ async function runFurniture(page) {
   const ITEM_PRICE = 260;
   const MAX_CART_ITEMS = 20;
   const MAX_LOOPS = 10;
+  const RESERVE_DOLLARS = 50000; // never buy furniture while dollars are at or below this (kept for the outfit buyer)
 
   let loopCount = 0;
 
@@ -24,6 +25,13 @@ async function runFurniture(page) {
     const dollarText = await page.locator('#player-dollars').innerText();
     const dollars = parseDollars(dollarText);
     console.log(`💰 Current dollars: ${dollars}`);
+
+    // 🛡️ Safety limit: keep a reserve of dollars for the outfit buyer
+    if (dollars <= RESERVE_DOLLARS) {
+      console.log(`🛡️ Dollars (${dollars}) are at or below the ${RESERVE_DOLLARS} reserve. Not buying furniture.`);
+      break;
+    }
+
     if (dollars < ITEM_PRICE * MAX_CART_ITEMS) {
       console.log('💸 Dollars below threshold. Stopping furniture loop.');
       break;

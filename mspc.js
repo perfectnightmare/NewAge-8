@@ -66,7 +66,7 @@ const scripts = [
   //{ name: 'Gifts Flashback', fn: runGifts, alwaysRun: false },
   { name: 'Teleport Activation', fn: runTeleport, alwaysRun: true },
   { name: 'Teleport Live', fn: runTeleportLive, alwaysRun: true },
-  { name: 'Furniture Script', fn: runFurnitureScript, alwaysRun: false },
+  { name: 'Furniture Script', fn: runFurnitureScript, alwaysRun: true },
   { name: 'Raise stats', fn: runDuelFP, alwaysRun: true }, //raises stats if +200
   //{ name: 'Battle Pass Chests', fn: runBattlePassChests, alwaysRun: false }, //opens chests
   //{ name: 'New Account', fn: runNewAccount, alwaysRun: false },

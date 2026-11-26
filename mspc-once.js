@@ -43,9 +43,13 @@ const scripts = [
   { name: 'Battle Pass Chests', fn: runBattlePassChests, alwaysRun: true },
   { name: 'Burn Energy-After', fn: runBurnEnergy, alwaysRun: true },
   { name: 'New Account', fn: runNewAccount, alwaysRun: true },
-  //{ name: 'Furniture Script', fn: runFurnitureScript, alwaysRun: true },
+  { name: 'Furniture Script', fn: runFurnitureScript, alwaysRun: true },
   { name: 'Teleport Activation', fn: runTeleport, alwaysRun: true },
   { name: 'Teleport Live', fn: runTeleportLive, alwaysRun: true },
+  { name: 'Boyfriend Kiss', fn: runBoyfriendKiss, alwaysRun: true },
+  { name: 'Guild Attack', fn: runGuildAttack, alwaysRun: true },
+  { name: 'Guild Show', fn: runGuildShow, alwaysRun: true },
+  { name: 'Daily Tasks', fn: runDailyTasks, alwaysRun: true },
   { name: 'Account Info', fn: runAccountInfo, alwaysRun: true },
 
 
