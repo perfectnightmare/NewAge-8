@@ -85,6 +85,35 @@ module.exports = async function runTeleport(page) {
 
 
   // ==============================================================
+  // 🆓 "IS THIS ACTIVATION FREE?" CHECK
+  // ==============================================================
+  //
+  // The game's is_free_activation flag does NOT mean "free to activate"
+  // (it was false on every event while the free slot was open).
+  // What the game really shows is activation_price:
+  //   - empty ([])            → free right now (the flashback slot is open)
+  //   - {"credits": 20}       → costs diamonds (the slot is taken)
+  // Anything else (null, missing, a price above 0) is NOT treated as free.
+  // ==============================================================
+
+  function isFreeActivation(e) {
+
+    const p = e.activation_price;
+
+    if (Array.isArray(p)) {
+      return p.length === 0;
+    }
+
+    if (p && typeof p === 'object') {
+      return ['credits', 'emeralds', 'dollars'].every(k => !(Number(p[k]) > 0));
+    }
+
+    return false;
+
+  }
+
+
+  // ==============================================================
   // 🔑 AUTH TOKEN HELPER (for GraphQL requests)
   // ==============================================================
   //
@@ -166,6 +195,44 @@ module.exports = async function runTeleport(page) {
       },
       { operationName, query, variables, token }
     );
+  }
+
+
+  // ==============================================================
+  // 💎 DIAMOND READER (used by the diamond guard around activation)
+  // ==============================================================
+
+  const STATS_QUERY = `query getLadyGlobalData {
+  main {
+    LadyStatsInfo {
+      emeralds
+      credits
+      dollars
+      fashion_points
+    }
+  }
+}`;
+
+  async function getDiamonds() {
+
+    const res = await runGraphQL({
+      operationName: 'getLadyGlobalData',
+      query: STATS_QUERY,
+      variables: {}
+    });
+
+    if (res?.errors) {
+      throw new Error(`Diamond read returned errors: ${JSON.stringify(res.errors)}`);
+    }
+
+    const credits = Number(res?.data?.main?.LadyStatsInfo?.credits);
+
+    if (!Number.isFinite(credits)) {
+      throw new Error('Could not read the diamond count from the game.');
+    }
+
+    return credits;
+
   }
 
 
@@ -857,7 +924,8 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
     // ==============================================================
     // FILTER TELEPORT FLASHBACK EVENTS (first page, normal order)
-    // Only events that can be activated AND are a FREE activation.
+    // Only events that can be activated AND have no activation price
+    // (an empty activation_price is how the game shows "free").
     // ==============================================================
 
     const unlockedEvents = [];
@@ -873,7 +941,7 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
       }
 
 
-      if (event.can_be_activated === true && event.is_free_activation === true) {
+      if (event.can_be_activated === true && isFreeActivation(event)) {
 
         unlockedEvents.push({
           id: event.id,
@@ -948,7 +1016,9 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
               title: e.title,
               is_flashback: e.is_flashback,
               can_be_activated: e.can_be_activated,
-              is_free_activation: e.is_free_activation
+              is_free_activation: e.is_free_activation,
+              activation_price: e.activation_price,
+              lock_type_info: e.lock_type_info
             }));
 
             if (!(j.search_events && j.search_events.has_more) || !list.length) {
@@ -968,9 +1038,17 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
         const activatable = new Map();
 
+        let flashbackCount = 0;
+        let canActivateCount = 0;
+        let emptyPriceCount = 0;
+
         for (const e of allEvents) {
 
-          if (e.is_flashback === true && e.can_be_activated === true && e.is_free_activation === true) {
+          if (e.is_flashback === true) flashbackCount++;
+          if (e.can_be_activated === true) canActivateCount++;
+          if (isFreeActivation(e)) emptyPriceCount++;
+
+          if (e.is_flashback === true && e.can_be_activated === true && isFreeActivation(e)) {
 
             activatable.set(Number(e.id), e.title);
 
@@ -993,6 +1071,11 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
         });
 
+
+        console.log(
+          `🔎 Event flags: ${allEvents.length} read | ${flashbackCount} flashbacks | ` +
+          `${canActivateCount} can_be_activated | ${emptyPriceCount} with no activation price`
+        );
 
         console.log(
           `⭐ Full event list: ${allEvents.length} teleport events read | ` +
@@ -1055,6 +1138,16 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
 
 
     // ==============================================================
+    // 💎 DIAMOND GUARD (before)
+    // If the diamonds cannot be read, nothing is activated.
+    // ==============================================================
+
+    const diamondsBefore = await getDiamonds();
+
+    console.log(`💎 Diamonds before activation: ${diamondsBefore}`);
+
+
+    // ==============================================================
     // ACTIVATE EVENT (tries the candidates one by one)
     // ==============================================================
 
@@ -1114,6 +1207,19 @@ fragment EventsTotalRewardsCount on EventRewardsTotalCount {
         console.log(
           `✅ Teleport flashback activated: ${cand.title}`
         );
+
+        // 💎 DIAMOND GUARD (after)
+        const diamondsAfter = await getDiamonds();
+
+        if (diamondsAfter < diamondsBefore) {
+
+          throw new Error(
+            `Diamonds went down during activation (${diamondsBefore} -> ${diamondsAfter}). Stopping.`
+          );
+
+        }
+
+        console.log(`💎 Diamonds after activation: ${diamondsAfter} (no change)`);
 
         selectedEvent = cand;
 

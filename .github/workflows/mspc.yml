@@ -2,12 +2,18 @@ name: Run mspc.js
 
 on:
   workflow_dispatch:
+    inputs:
+      run_extra:
+        description: 'Run the extra tasks (extra-tasks.js) after the common ones? true / false'
+        required: false
+        default: 'false'
+        type: string
 
 jobs:
   run-mspc:
     runs-on: ubuntu-22.04
     # runs-on: ubuntu-latest (optional)
-    timeout-minutes: 120
+    timeout-minutes: 150
 
     steps:
       - name: ⬇️ Checkout repository
@@ -55,6 +61,10 @@ jobs:
           LP_FASHION_MAGAZINE_URL: ${{ secrets.LP_FASHION_MAGAZINE_URL }}
           LP_SOLITAIRE_URL: ${{ secrets.LP_SOLITAIRE_URL }}
           TICKET_RESERVE: 95
+          OUTFIT_DRY_RUN: 0
+          BOARD_URL: ${{ secrets.BOARD_URL }}
+          BOARD_PASSWORD: ${{ secrets.BOARD_PASSWORD }}
+          RUN_EXTRA: ${{ github.event.inputs.run_extra || 'false' }}
 
       - name: 🖼️ Upload error screenshots if failed
         if: failure()

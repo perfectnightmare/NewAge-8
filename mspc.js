@@ -34,9 +34,52 @@ const runTeleportLive = require('./tele-live.js');
 const runMemoryLive = require('./memory-live.js');
 const runMemoryActivation = require('./memory-activation.js');
 
+
+
+// ================================================================
+// 🧩 PHASE SETTINGS
+// ================================================================
+//
+// Phase 1 = the COMMON list below (runs on every run).
+// Phase 2 = the EXTRA list in extra-tasks.js (runs only when the
+//           workflow was started with run_extra = true).
+//
+// Ticket reserve:
+//   Phase 1 uses whatever the workflow gives (95).
+//   Phase 2 uses 0, so all tickets are spent.
+//
+// skipWhenExtra:
+//   A common-list entry marked skipWhenExtra: true is SKIPPED when
+//   Phase 2 is active (RUN_EXTRA = true), because the same script
+//   runs in Phase 2 anyway. Burn Energy uses this so Phase 1 does
+//   not use up the blue energy before Phase 2 can spend tickets.
+//   When Phase 2 is not active, the entry runs normally.
+
+const RUN_EXTRA =
+  String(process.env.RUN_EXTRA || 'false').toLowerCase() === 'true';
+
+const COMMON_TICKET_RESERVE = process.env.TICKET_RESERVE;
+const EXTRA_TICKET_RESERVE = '0';
+
+function setTicketReserve(value) {
+
+  if (value === undefined) {
+    delete process.env.TICKET_RESERVE;
+  } else {
+    process.env.TICKET_RESERVE = String(value);
+  }
+
+}
+
+
+
+// ================================================================
+// 📋 COMMON SCRIPT LIST (Phase 1)
+// ================================================================
+
 const scripts = [
 
-  { name: 'Burn Energy', fn: runBurnEnergy, alwaysRun: true },
+  { name: 'Burn Energy', fn: runBurnEnergy, alwaysRun: true, skipWhenExtra: true },
   { name: 'Claim Duel Rewards', fn: runClaimRewards, alwaysRun: true },
 
   /*{ name: 'Fashion Magazine', fn: runFashionMagazine, envKey: 'LP_FASHION_MAGAZINE_URL' },
@@ -247,20 +290,16 @@ async function collectDailyReward(page) {
 
 
 // ================================================================
-// 🧩 RUN ALL SCRIPTS
+// 🧩 RUN A LIST OF SCRIPTS
 // ================================================================
+//
+// Same loop as before. It receives the list to run (common list
+// or extra list). An entry with skipWhenExtra: true is skipped
+// when Phase 2 is active.
 
-async function runAllScripts(page) {
+async function runAllScripts(page, list) {
 
-  // ==============================================================  
-  // ✅ RUN EACH SCRIPT
-  // ==============================================================
-
-  // IMPORTANT:
-  // This is your existing script loop.
-  // The logic has not been changed.
-
-  for (const script of scripts) {
+  for (const script of list) {
 
     const shouldRun =
       script.alwaysRun ||
@@ -275,6 +314,18 @@ async function runAllScripts(page) {
 
       console.log(
         `⏭️ ${script.name} skipped (not active or URL = OFF)`
+      );
+
+      continue;
+
+    }
+
+
+
+    if (script.skipWhenExtra && RUN_EXTRA) {
+
+      console.log(
+        `⏭️ ${script.name} skipped (extra phase is active, it runs there)`
       );
 
       continue;
@@ -311,6 +362,56 @@ async function runAllScripts(page) {
     }
 
   }
+
+}
+
+
+
+// ================================================================
+// 🌙 EXTRA PHASE (Phase 2)
+// ================================================================
+//
+// Runs in the SAME logged-in session, right after the common
+// list. extra-tasks.js is only loaded here, so a problem in that
+// file can never break the common run.
+
+async function runExtraPhase(page) {
+
+  console.log(DIVIDER);
+  console.log("🌙 Phase 2: extra tasks (ticket reserve 0)");
+  console.log(DIVIDER);
+
+  let extraScripts;
+
+  try {
+
+    extraScripts = require('./extra-tasks.js');
+
+  } catch (err) {
+
+    console.log(`❌ Could not load extra-tasks.js: ${err.message}`);
+    console.log(DIVIDER);
+
+    return;
+
+  }
+
+  setTicketReserve(EXTRA_TICKET_RESERVE);
+
+  try {
+
+    await runAllScripts(page, extraScripts);
+
+  } finally {
+
+    // Put the normal reserve back (matters when there are several
+    // accounts in one run).
+    setTicketReserve(COMMON_TICKET_RESERVE);
+
+  }
+
+  console.log("🌙 Phase 2 finished.");
+  console.log(DIVIDER);
 
 }
 
@@ -387,6 +488,10 @@ async function logout(page, account) {
     `👥 Loaded ${accounts.length} account(s).`
   );
 
+  console.log(
+    `🌙 Extra tasks this run: ${RUN_EXTRA ? 'YES' : 'NO'}`
+  );
+
 
 
   // ==============================================================
@@ -451,10 +556,26 @@ async function logout(page, account) {
 
 
       // ----------------------------------------------------------
-      // ▶️ RUN ALL EXISTING SCRIPTS
+      // ☀️ PHASE 1: COMMON SCRIPTS
       // ----------------------------------------------------------
 
-      await runAllScripts(page);
+      setTicketReserve(COMMON_TICKET_RESERVE);
+
+      console.log("☀️ Phase 1: common tasks");
+
+      await runAllScripts(page, scripts);
+
+
+
+      // ----------------------------------------------------------
+      // 🌙 PHASE 2: EXTRA SCRIPTS (only when run_extra = true)
+      // ----------------------------------------------------------
+
+      if (RUN_EXTRA) {
+
+        await runExtraPhase(page);
+
+      }
 
 
 
