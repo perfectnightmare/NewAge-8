@@ -30,6 +30,7 @@ const runAccountInfo = require('./account-info.js');
 const runTeleportLive = require('./tele-live.js');
 const runMemoryLive = require('./memory-live.js');
 const runMemoryActivation = require('./memory-activation.js');
+const runOutfitBuyer = require('./outfit-buyer.js');
 
 
 
@@ -87,6 +88,7 @@ const scripts = [
   { name: 'Teleport Live', fn: runTeleportLive, alwaysRun: true },
   { name: 'Memory Live', fn: runMemoryLive, alwaysRun: true },
   { name: 'Memory Flashback', fn: runMemoryActivation, alwaysRun: true },
+  { name: 'Outfit Buyer', fn: runOutfitBuyer, alwaysRun: true },
   { name: 'Furniture Script', fn: runFurnitureScript, alwaysRun: true },
   { name: 'Stats and Achievements', fn: runStatsAndAchievements, alwaysRun: true },
 

@@ -1,8 +1,9 @@
 // outfit-buyer.js
-// EVENING only, followers only (never main). Buys what this account is missing, based on today's record on the board:
+// Followers only (never main). Runs on every hourly run. Buys what this account is missing, based on today's record on the board:
 //  1) items from collections main owns from (live, or the flashback one)
 //  2) mall items main is wearing (only when the record says "dress up")
 // Unlocks the flashback collection ONLY if: no flashback collection is active here, the free slot is available, and ALLOW_UNLOCK=1.
+// Diamonds: at most DIAMOND_CAP (default 60) are spent per run.
 // OUTFIT_DRY_RUN=1 logs what it WOULD do and changes nothing.
 // Console output: one line on a clean success; the full log when anything is not a clean success.
 
@@ -175,13 +176,15 @@ async function run(page) {
   log(`🪪 Lady ID ${ladyId} | 🕒 Server ${today} ${pad(d.getHours())}:${pad(d.getMinutes())}`);
 
   if (ladyId === MAIN_LADY_ID) { log('⏭️ This is the main account. Nothing to buy.'); return '✅ Outfit buyer: main account, nothing to buy.'; }
-  if (d.getHours() < 12) { log('🌅 Morning phase. Buying only happens in the evening.'); return '✅ Outfit buyer: morning phase, nothing to do.'; }
   if (!process.env.BOARD_URL || !process.env.BOARD_PASSWORD) { warn('⚠️ BOARD_URL / BOARD_PASSWORD are not set. Nothing to do.'); return null; }
 
   const rec = await boardRead();
-  if (!rec) { warn('ℹ️ The board is empty.'); return null; }
+  if (!rec) { log('ℹ️ The board is empty.'); return '✅ Outfit buyer: the board is empty, nothing to do.'; }
   log(`📋 Board record: game date ${rec.gameDate}, dress up: ${rec.dressUp}`);
-  if (rec.gameDate !== today) { warn(`ℹ️ The record is for ${rec.gameDate}, today is ${today}. Too old, buying nothing.`); return null; }
+  if (rec.gameDate !== today) {
+    log(`ℹ️ The record is for ${rec.gameDate}, today is ${today}. Too old, buying nothing.`);
+    return '✅ Outfit buyer: no record for today yet, nothing to do.';
+  }
 
   let { tiles, freeSlot } = await readHeader(page, html);
   const stats = await readStats(page);
