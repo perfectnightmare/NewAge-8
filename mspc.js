@@ -9,11 +9,8 @@ const DIVIDER = '─────────────────────
 
 const runBurnEnergy = require('./burn-energy.js');
 const runFashionMagazine = require('./fashion-magazine.js');
-const runTeleportEvent = require('./tele.js');
-const runSolitaireEvent = require('./solitaire.js');
 const runMapsEvent = require('./maps.js');
 const runSlotsEvent = require('./Slots.js');
-const runMemoryEvent = require('./memory.js');
 const runFurnitureScript = require('./furniture.js');
 const runDailyTasks = require('./daily-tasks.js');
 const runBoyfriendKiss = require('./bfk.js');
@@ -28,7 +25,7 @@ const runDuelFP = require('./duel-fp.js');
 const runClaimRewards = require('./claim-BPrewards.js');
 const runGuildAttack = require('./guild-attack.js');
 const runBattlePassChests = require('./battlepass-chests.js');
-const runNewAccount = require('./new-account.js');
+const runStatsAndAchievements = require('./stats-and-achievements.js');
 const runAccountInfo = require('./account-info.js');
 const runTeleportLive = require('./tele-live.js');
 const runMemoryLive = require('./memory-live.js');
@@ -81,42 +78,27 @@ const scripts = [
 
   { name: 'Burn Energy', fn: runBurnEnergy, alwaysRun: true, skipWhenExtra: true },
   { name: 'Claim Duel Rewards', fn: runClaimRewards, alwaysRun: true },
-
-  /*{ name: 'Fashion Magazine', fn: runFashionMagazine, envKey: 'LP_FASHION_MAGAZINE_URL' },
-
-  { name: 'Tele Event', fn: runTeleportEvent, envKey: 'LP_TELEPORT_URL' },
-
-  { name: 'Solitaire Event', fn: runSolitaireEvent, envKey: 'LP_SOLITAIRE_URL' },
-
-  { name: 'Maps Event', fn: runMapsEvent, envKey: 'LP_MAPS_URL' },
-
-  { name: 'Slots Event', fn: runSlotsEvent, envKey: 'LP_SLOTS_URL' },
-
-  { name: 'Parties', fn: runParties, alwaysRun: false },
-
-  { name: 'Memory Event', fn: runMemoryEvent, envKey: 'LP_MEMORY_URL' }, */
-
   { name: 'Daily Tasks', fn: runDailyTasks, alwaysRun: true },
-
   { name: 'Boyfriend Kiss', fn: runBoyfriendKiss, alwaysRun: true },
   { name: 'Guild Attack', fn: runGuildAttack, alwaysRun: true },
-
   { name: 'Guild Show', fn: runGuildShow, alwaysRun: true },
-
-  //{ name: 'Pet Training', fn: runPetTraining, alwaysRun: false },
-
-  //{ name: 'Bridesmaids Tasks', fn: runBridesmaids, alwaysRun: false },
-
   { name: 'Apartment Income', fn: runApartment, alwaysRun: true },
-  //{ name: 'Gifts Flashback', fn: runGifts, alwaysRun: false },
   { name: 'Teleport Activation', fn: runTeleport, alwaysRun: true },
   { name: 'Teleport Live', fn: runTeleportLive, alwaysRun: true },
   { name: 'Memory Live', fn: runMemoryLive, alwaysRun: true },
   { name: 'Memory Flashback', fn: runMemoryActivation, alwaysRun: true },
   { name: 'Furniture Script', fn: runFurnitureScript, alwaysRun: true },
-  { name: 'Raise stats', fn: runDuelFP, alwaysRun: true }, //raises stats if +200
-  //{ name: 'Battle Pass Chests', fn: runBattlePassChests, alwaysRun: false }, //opens chests
-  //{ name: 'New Account', fn: runNewAccount, alwaysRun: false },
+  { name: 'Stats and Achievements', fn: runStatsAndAchievements, alwaysRun: true },
+
+  /*{ name: 'Fashion Magazine', fn: runFashionMagazine, envKey: 'LP_FASHION_MAGAZINE_URL' },
+  { name: 'Maps Event', fn: runMapsEvent, envKey: 'LP_MAPS_URL' },
+  { name: 'Slots Event', fn: runSlotsEvent, envKey: 'LP_SLOTS_URL' },
+  { name: 'Parties', fn: runParties, alwaysRun: false },
+  { name: 'Pet Training', fn: runPetTraining, alwaysRun: false },
+  { name: 'Bridesmaids Tasks', fn: runBridesmaids, alwaysRun: false },
+  { name: 'Gifts Flashback', fn: runGifts, alwaysRun: false },
+  { name: 'Battle Pass Chests', fn: runBattlePassChests, alwaysRun: false }, //opens chests
+  { name: 'New Account', fn: runNewAccount, alwaysRun: false }, */
   { name: 'Account Info', fn: runAccountInfo, alwaysRun: true },
 
 ];
