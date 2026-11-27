@@ -2,6 +2,7 @@
 // Read-only: collects account info and logs it to the console.
 
 const BASE = 'https://v3.g.ladypopular.com';
+const GRAPHQL_CONTEST_URL = 'https://ladygram.v3.g.ladypopular.com/graphql';
 const DIVIDER = '────────────────────────────────────────';
 
 const num = (v) => {
@@ -15,6 +16,17 @@ const decodeEntities = (s) => String(s ?? '')
   .replace(/&gt;/g, '>')
   .replace(/&quot;/g, '"')
   .replace(/&#0?39;/g, "'");
+
+// 2d 21h  |  5h 12m  |  40m
+function formatTimeLeft(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 'none';
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
 
 // Pull the {...} argument out of LadyHeader.setLadyStats({...}) by matching braces
 // (more reliable than a regex because the JSON is large and nested).
@@ -67,6 +79,52 @@ const domPlayerId = (html) => {
   return m ? m[1] : null;
 };
 
+// Active FLASHBACK event and collection from the header banners.
+// Live (non-flashback) events and collections are ignored.
+async function readFlashbacks(page, html) {
+  const raw = await page.evaluate((html) => {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const container = doc.querySelector('#header-events-container');
+    if (!container) return { found: false };
+
+    const read = (el) => {
+      if (!el) return null;
+      const title = (el.querySelector('.item-title')?.textContent || '').replace(/\s+/g, ' ').trim();
+      const seconds = Number(el.querySelector('.item-timeleft')?.getAttribute('data-time-left'));
+      const typeClass = [...el.classList].find(c => c.startsWith('event-type-'));
+      return {
+        title,
+        type: typeClass ? typeClass.replace('event-type-', '') : null,
+        seconds: Number.isFinite(seconds) ? seconds : null
+      };
+    };
+
+    return {
+      found: true,
+      event: read(container.querySelector('.header-event-banner[data-is_flashback="1"]')),
+      collection: read(container.querySelector('.header-collection-banner[data-is_flashback="1"]'))
+    };
+  }, html);
+
+  if (!raw.found) {
+    console.log('⚠️ Flashback banners: the header event list was not found on the page. Showing none.');
+  }
+
+  const ev = raw.event;
+  const col = raw.collection;
+
+  return {
+    event: {
+      name: ev ? `${decodeEntities(ev.title)}${ev.type ? ` (${ev.type})` : ''}` : 'none',
+      timeLeft: ev ? formatTimeLeft(ev.seconds) : 'none'
+    },
+    collection: {
+      name: col ? decodeEntities(col.title) : 'none',
+      timeLeft: col ? formatTimeLeft(col.seconds) : 'none'
+    }
+  };
+}
+
 async function getVipShopInfo(page) {
   const res = await page.request.get(`${BASE}/vip_shop.php?tab=dollars`, {
     headers: {
@@ -84,6 +142,8 @@ async function getVipShopInfo(page) {
 
   const season = j.fashion_season_data ?? {};
   const chests = season.season_chests_data ?? {};
+
+  const flashback = await readFlashbacks(page, html);
 
   return {
     currencies: {
@@ -103,7 +163,8 @@ async function getVipShopInfo(page) {
       ladyId: j.id ?? domLadyId(html),
       playerId: domPlayerId(html),
       name: j.name ?? null
-    }
+    },
+    flashback
   };
 }
 
@@ -217,13 +278,85 @@ async function getGuildInfo(page) {
   };
 }
 
+// Contest info (Fashion Arena and Beauty Pageant): points are the wins.
+// The request needs the user id that is inside the login token, so the token is
+// found in the browser storage and decoded there.
+const CONTEST_QUERY =
+  'query GetContest($id: Int!) { ' +
+  'arenaContestInfo: userContestInfo(contest_type: "ARENA", user_id: $id) { points position league } ' +
+  'pageantContestInfo: userContestInfo(contest_type: "BEAUTY_PAGEANT", user_id: $id) { points position league } ' +
+  '}';
+
+async function getContestInfo(page) {
+  if (!page.url().startsWith(BASE)) {
+    await page.goto(`${BASE}/guild.php`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  }
+
+  const out = await page.evaluate(async ({ query, url }) => {
+    const decode = (jwt) => {
+      try {
+        let p = jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        while (p.length % 4) p += '=';
+        return JSON.parse(atob(p));
+      } catch (e) { return null; }
+    };
+
+    let token = null, userId = null;
+    for (const store of [window.localStorage, window.sessionStorage]) {
+      for (let i = 0; i < store.length && !token; i++) {
+        let v = store.getItem(store.key(i)) || '';
+        v = v.replace(/^"|"$/g, '').replace(/^Bearer\s+/i, '');
+        if (!v.startsWith('eyJ')) continue;
+        const payload = decode(v);
+        if (payload && payload.user_id && (!payload.exp || payload.exp * 1000 > Date.now())) {
+          token = v; userId = payload.user_id;
+        }
+      }
+    }
+    if (!token) return { error: 'no login token with a user id was found in the browser storage' };
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          accept: 'application/graphql-response+json,application/json;q=0.9',
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json'
+        },
+        credentials: 'include',
+        signal: controller.signal,
+        body: JSON.stringify({ operationName: 'GetContest', variables: { id: userId }, query })
+      });
+      const text = await res.text();
+      try { return { json: JSON.parse(text), http: res.status }; }
+      catch (e) { return { error: `non-JSON reply (HTTP ${res.status})` }; }
+    } catch (e) {
+      return { error: `request failed: ${e.message}` };
+    } finally {
+      clearTimeout(timer);
+    }
+  }, { query: CONTEST_QUERY, url: GRAPHQL_CONTEST_URL });
+
+  if (out.error) throw new Error(out.error);
+
+  const d = out.json?.data;
+  if (out.json?.errors || !d?.arenaContestInfo || !d?.pageantContestInfo) {
+    throw new Error(`contest reply had no data: ${JSON.stringify(out.json).slice(0, 200)}`);
+  }
+
+  const map = (c) => ({ wins: c.points, rank: c.position, league: c.league });
+  return { arena: map(d.arenaContestInfo), pageant: map(d.pageantContestInfo) };
+}
+
 module.exports = async function runAccountInfo(page) {
   console.log('📊 Collecting account info...');
 
   const payload = { collectedAt: new Date().toISOString() };
   const errors = [];
 
-  // Step 1: VIP shop page
+  // Step 1: VIP shop page (also reads the flashback banners)
   try {
     Object.assign(payload, await getVipShopInfo(page));
   } catch (err) {
@@ -247,8 +380,16 @@ module.exports = async function runAccountInfo(page) {
     console.log(`❌ Step 3 (club) failed: ${err.message}`);
   }
 
+  // Step 4: contest info (wins, rank, league)
+  try {
+    payload.contest = await getContestInfo(page);
+  } catch (err) {
+    errors.push(`Step 4: ${err.message}`);
+    console.log(`❌ Step 4 (contest) failed: ${err.message}`);
+  }
+
   // ---------- Human-readable log ----------
-  const { currencies: c, season: s, identity: id, popularity: p, guild: g } = payload;
+  const { currencies: c, season: s, identity: id, popularity: p, guild: g, flashback: f, contest: k } = payload;
 
   console.log(DIVIDER);
   console.log('📋 ACCOUNT INFO');
@@ -282,6 +423,17 @@ module.exports = async function runAccountInfo(page) {
     console.log(`🏰 Club: ${g.name ?? '(no club)'} (ID ${g.id ?? '-'}) | Trophies: ${g.trophyCount}`);
     if (g.trophies) console.log(`🏅 ${g.trophies}`);
   }
+  if (f) {
+    console.log(
+      `🕰️ Flashback event: ${f.event.name} (${f.event.timeLeft}) | collection: ${f.collection.name} (${f.collection.timeLeft})`
+    );
+  }
+  if (k) {
+    console.log(
+      `⚔️ Arena: ${k.arena.league}, rank ${k.arena.rank}, wins ${k.arena.wins} | ` +
+      `👑 Pageant: ${k.pageant.league}, rank ${k.pageant.rank}, wins ${k.pageant.wins}`
+    );
+  }
 
   // ---------- Machine-readable line (for the Google Sheet parser) ----------
   // errorCount is a plain number, so the line has no [ ] for GitHub to mask as ***
@@ -290,7 +442,7 @@ module.exports = async function runAccountInfo(page) {
   console.log(DIVIDER);
 
   // Let the main script know this step failed if all parts broke
-  if (errors.length === 3) {
+  if (errors.length === 4) {
     throw new Error(errors.join(' | '));
   }
 };
