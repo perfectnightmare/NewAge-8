@@ -2,14 +2,13 @@
 // Followers only (never main). Runs on every hourly run. Buys what this account is missing, based on today's record on the board:
 //  1) items from collections main owns from (live, or the flashback one)
 //  2) mall items main is wearing (only when the record says "dress up")
-// Unlocks the flashback collection ONLY if: no flashback collection is active here, the free slot is available, and ALLOW_UNLOCK=1.
+// Unlocks the flashback collection when: no flashback collection is active here and the free slot is available.
 // Diamonds: at most DIAMOND_CAP (default 60) are spent per run.
 // OUTFIT_DRY_RUN=1 logs what it WOULD do and changes nothing.
 // Console output: one line on a clean success; the full log when anything is not a clean success.
 
 const BASE = 'https://v3.g.ladypopular.com';
 const DRY_RUN = process.env.OUTFIT_DRY_RUN === '1';
-const ALLOW_UNLOCK = process.env.ALLOW_UNLOCK === '1';
 const MAIN_LADY_ID = String(process.env.MAIN_LADY_ID || '8859158');
 const DIAMOND_CAP = Number(process.env.DIAMOND_CAP || 60);
 const MAX_WARDROBE_PAGES = 100;   // pages per wardrobe list (about 18 items per page)
@@ -205,7 +204,6 @@ async function run(page) {
       if (c.kind !== 'flashback') { log(`⏭️ ${c.name} (live) is not active on this account. Skipping.`); continue; }
       if (tiles.some(t => t.flashback)) { log(`⏭️ ${c.name}: another flashback collection is already active here. Not unlocking a second one.`); continue; }
       if (!freeSlot) { log(`⏭️ ${c.name}: no free flashback slot on this account. Not unlocking.`); continue; }
-      if (!ALLOW_UNLOCK) { warn(`⏭️ ${c.name}: would unlock it (free slot available), but unlocking is switched off (ALLOW_UNLOCK is not 1).`); continue; }
       if (DRY_RUN) { log(`🧪 DRY RUN: would unlock ${c.name} (${c.id}) now.`); continue; }
       const u = await postJson(page, '/ajax/mall/boutique.php', `action=unlockCollection&collectionId=${c.id}`);
       log(`🔓 Unlock reply: ${safe(u)}`);
