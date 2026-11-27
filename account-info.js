@@ -350,6 +350,33 @@ async function getContestInfo(page) {
   return { arena: map(d.arenaContestInfo), pageant: map(d.pageantContestInfo) };
 }
 
+// The doll in her CURRENT outfit: one finished picture, linked from duels.php
+// (lady.<ladyId>.<hash>.webp). In the page source the slashes are written as \/ .
+// A failed read is only logged: it does not count as an error step.
+async function getDollUrl(page, ladyId) {
+  const res = await page.request.get(`${BASE}/duels.php`, {
+    headers: {
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'en-US,en;q=0.9',
+      'upgrade-insecure-requests': '1',
+      referer: `${BASE}/welcome.php`
+    }
+  });
+  if (!res.ok()) throw new Error(`duels.php returned HTTP ${res.status()}`);
+
+  const html = await res.text();
+  const re = /https:\\?\/\\?\/photos\.static-ladypopular\.com\\?\/ldp3\\?\/photos\\?\/[A-Za-z0-9_-]+\\?\/lady\.(\d+)\.[A-Za-z0-9]+\.webp/g;
+
+  let first = null;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const url = m[0].replace(/\\/g, '');
+    if (ladyId && m[1] === String(ladyId)) return url;   // the one for this account
+    if (!first) first = url;
+  }
+  return first;
+}
+
 module.exports = async function runAccountInfo(page) {
   console.log('📊 Collecting account info...');
 
@@ -386,6 +413,16 @@ module.exports = async function runAccountInfo(page) {
   } catch (err) {
     errors.push(`Step 4: ${err.message}`);
     console.log(`❌ Step 4 (contest) failed: ${err.message}`);
+  }
+
+  // Doll picture (NOT counted as an error step)
+  try {
+    const url = await getDollUrl(page, payload.identity?.ladyId);
+    payload.dollUrl = url || '';
+    if (!url) console.log('⚠️ Doll: no doll picture link was found on duels.php.');
+  } catch (err) {
+    payload.dollUrl = '';
+    console.log(`⚠️ Doll: could not read it (${err.message}). The cell stays empty.`);
   }
 
   // ---------- Human-readable log ----------
@@ -434,6 +471,7 @@ module.exports = async function runAccountInfo(page) {
       `👑 Pageant: ${k.pageant.league}, rank ${k.pageant.rank}, wins ${k.pageant.wins}`
     );
   }
+  console.log(`🧍 Doll: ${payload.dollUrl || 'none'}`);
 
   // ---------- Machine-readable line (for the Google Sheet parser) ----------
   // errorCount is a plain number, so the line has no [ ] for GitHub to mask as ***
