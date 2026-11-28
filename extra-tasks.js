@@ -17,6 +17,7 @@
 const runBurnEnergy = require('./burn-energy.js');
 const runBattlePassChests = require('./battlepass-chests.js');
 const runOutfitFollower = require('./outfit-follower.js'); //reverting back
+const runAccountInfo = require('./account-info.js');
 
 module.exports = [
 
@@ -24,5 +25,6 @@ module.exports = [
   { name: 'Burn Energy-Before', fn: runBurnEnergy, alwaysRun: true },
   { name: 'Battle Pass Chests', fn: runBattlePassChests, alwaysRun: true },
   { name: 'Burn Energy-After', fn: runBurnEnergy, alwaysRun: true },
+  { name: 'Account Info', fn: runAccountInfo, alwaysRun: true },
 
 ];

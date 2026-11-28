@@ -101,7 +101,7 @@ const scripts = [
   { name: 'Gifts Flashback', fn: runGifts, alwaysRun: false },
   { name: 'Battle Pass Chests', fn: runBattlePassChests, alwaysRun: false }, //opens chests
   { name: 'New Account', fn: runNewAccount, alwaysRun: false }, */
-  { name: 'Account Info', fn: runAccountInfo, alwaysRun: true },
+  { name: 'Account Info', fn: runAccountInfo, alwaysRun: true, skipWhenExtra: true },
 
 ];
 

@@ -1,7 +1,12 @@
 // outfit-follower.js
 // MORNING (server time before noon): every account switches to its own saved F1/F2/F3 outfit.
 // EVENING (noon to midnight): follower accounts (never main) copy main's look from the board,
-// only if the record is for today, says "dress up", and the account owns every piece (event items included).
+// only if the record is for today, says "dress up", and the account can complete the look.
+// Per piece, in this order:
+//   1) the account owns the exact colour -> use it
+//   2) "Any colour" is ticked on the board -> wear the owned colour of that item that is closest to main's colour
+//   3) "Minor" is ticked on the board -> skip the piece, dress the rest
+//   4) otherwise the whole look is dropped (the account stays in its default outfit)
 // MAKEUP: copied too (through the beauty salon save), but only if the clothes check passed AND every makeup item
 // (hair included) is already available to this account in the salon (no purchases ever).
 // Otherwise the account keeps its own makeup.
@@ -17,6 +22,69 @@ const SALON = '/ajax/beauty_salon_lady.php';
 const MAX_WARDROBE_PAGES = 100;   // pages per wardrobe category (about 18 items per page)
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const pad = (n) => String(n).padStart(2, '0');
+
+// ---------------------------------------------------------------- NEW: colour table (clothes colours 1-89, average RGB of the game's swatch)
+const COLOUR_RGB = {
+  1: [236,236,236], 2: [20,20,20], 3: [21,167,223], 4: [20,91,159], 5: [20,95,90], 6: [55,149,63], 7: [138,189,72],
+  8: [235,225,20], 9: [129,51,216], 10: [229,122,174], 11: [199,22,105], 12: [153,29,32], 13: [221,44,49],
+  14: [225,139,21], 15: [225,104,49], 16: [236,230,118], 17: [158,158,158], 18: [88,63,49], 19: [210,145,226],
+  20: [149,186,217], 21: [149,217,152], 22: [115,99,87], 23: [222,197,168], 24: [83,93,128], 25: [121,70,32],
+  26: [150,111,59], 27: [81,110,75], 28: [150,123,102], 29: [172,82,46], 30: [236,192,55], 31: [132,216,221],
+  32: [233,220,170], 33: [236,177,202], 34: [167,198,118], 35: [198,119,119], 36: [180,131,196], 37: [193,199,209],
+  38: [96,60,177], 39: [42,83,30], 40: [165,57,148], 41: [65,79,94], 42: [39,56,101], 43: [110,186,149],
+  44: [147,60,49], 45: [78,33,33], 46: [111,20,39], 47: [207,152,58], 48: [242,190,176], 49: [191,20,67],
+  50: [99,101,114], 51: [89,50,94], 52: [213,201,171], 53: [40,94,126], 54: [66,141,157], 55: [236,150,138],
+  56: [229,47,126], 57: [40,209,21], 58: [232,109,233], 59: [157,225,192], 60: [212,236,50], 61: [33,221,230],
+  62: [235,71,33], 63: [17,157,136], 64: [239,208,206], 65: [242,229,214], 66: [216,242,239], 67: [242,235,200],
+  68: [22,158,185], 69: [224,136,153], 70: [145,79,84], 71: [232,148,95], 72: [123,198,184], 73: [222,215,138],
+  74: [225,197,131], 75: [201,178,157], 76: [208,78,126], 77: [156,184,201], 78: [212,171,197], 79: [171,161,194],
+  80: [33,53,21], 81: [110,123,9], 82: [108,97,60], 83: [121,144,152], 84: [90,50,56], 85: [144,95,77],
+  86: [242,113,132], 87: [117,47,143], 88: [195,135,180], 89: [106,126,166]
+};
+// NEW: the game's colour families (palettes). Family 1 is black and white together, so it is never used as a guide.
+const PALETTES = {
+  1: [1, 2],
+  6: [6, 59, 21, 43, 72, 63, 5, 27, 39, 57, 7, 34, 81, 80, 82],
+  8: [8, 16, 30, 32, 60, 73, 67],
+  13: [12, 13, 46, 45, 48, 55, 65],
+  15: [14, 15, 71, 47, 62, 29, 44],
+  17: [17, 41, 83, 50, 37],
+  19: [19, 78, 88, 58, 36, 40, 87, 38, 9, 79, 51],
+  56: [56, 49, 11, 76, 69, 10, 33, 86, 35, 70, 64],
+  68: [68, 20, 3, 4, 53, 54, 61, 31, 77, 24, 42, 89, 66],
+  85: [85, 28, 22, 84, 18, 25, 26, 75, 52, 74, 23]
+};
+const FAMILY_OF = {};
+Object.keys(PALETTES).forEach(p => PALETTES[p].forEach(c => { FAMILY_OF[c] = Number(p); }));
+
+// NEW: perceptual colour distance ("redmean"); unknown colours fall back to a huge number plus the id gap
+function colourDistance(a, b) {
+  const A = COLOUR_RGB[a], B = COLOUR_RGB[b];
+  if (!A || !B) return 1e6 + Math.abs(a - b);
+  const rm = (A[0] + B[0]) / 2;
+  const dr = A[0] - B[0], dg = A[1] - B[1], db = A[2] - B[2];
+  return Math.sqrt((2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db);
+}
+
+// NEW: from the colours the account owns, pick the one closest to the wanted colour.
+// Same family first (except family 1, black/white, which is judged by RGB only), then everything owned. Ties go to the lower id.
+function pickColour(wanted, ownedList) {
+  if (!ownedList.length) return null;
+  const fam = FAMILY_OF[wanted];
+  let pool = ownedList, sameFamily = false;
+  if (fam && fam !== 1) {
+    const inFam = ownedList.filter(c => FAMILY_OF[c] === fam);
+    if (inFam.length) { pool = inFam; sameFamily = true; }
+  }
+  let best = null;
+  for (const c of pool) {
+    const d = colourDistance(wanted, c);
+    if (best === null || d < best.distance - 1e-9 || (Math.abs(d - best.distance) <= 1e-9 && c < best.colour)) {
+      best = { colour: c, distance: d, sameFamily };
+    }
+  }
+  return best;
+}
 
 // ---------------------------------------------------------------- buffered logging
 let buf = [];
@@ -252,16 +320,36 @@ async function dressFromBoard(page, clock) {
   const cats = [...new Set(look.map(l => l.category))];
   const owned = {};
   for (const cat of cats) { owned[cat] = await ownedRows(page, cat); await sleep(400); }
-  const rows = [], missing = [];
+
+  // CHANGED: per piece: exact colour -> closest owned colour (if "Any colour") -> skip (if "Minor") -> drop the look
+  const rows = [], missing = [], swaps = [], skipped = [];
   for (const l of look) {
-    const row = owned[l.category] && owned[l.category][l.itemId] && owned[l.category][l.itemId][l.colour];
-    log(`👗 layer ${l.layer}: item ${l.itemId} colour ${l.colour} (${l.kind}) -> ${row ? 'owned, row ' + row : 'NOT OWNED'}`);
-    if (row) rows.push({ id: row, layer: l.layer }); else missing.push(l);
+    const have = (owned[l.category] && owned[l.category][l.itemId]) || {};
+    const exact = have[l.colour];
+    if (exact) {
+      rows.push({ id: exact, layer: l.layer, itemId: l.itemId, colour: l.colour });
+      log(`👗 layer ${l.layer}: item ${l.itemId} colour ${l.colour} (${l.kind}) -> owned, row ${exact}`);
+      continue;
+    }
+    let pick = null;
+    if (l.anyColour === true) pick = pickColour(l.colour, Object.keys(have).map(Number));
+    if (pick) {
+      rows.push({ id: have[pick.colour], layer: l.layer, itemId: l.itemId, colour: pick.colour });
+      swaps.push(`item ${l.itemId}: wanted ${l.colour}, wearing ${pick.colour}`);
+      log(`🎨 layer ${l.layer}: item ${l.itemId} wanted colour ${l.colour}, wearing colour ${pick.colour} (${pick.sameFamily ? 'same family' : 'closest overall'}, distance ${Math.round(pick.distance)})`);
+    } else if (l.minor === true) {
+      skipped.push(`item ${l.itemId} (${l.kind})`);
+      log(`⏭️ layer ${l.layer}: item ${l.itemId} colour ${l.colour} (${l.kind}) -> NOT OWNED, but it is a minor piece, skipping it`);
+    } else {
+      missing.push(l);
+      log(`👗 layer ${l.layer}: item ${l.itemId} colour ${l.colour} (${l.kind}) -> NOT OWNED${l.anyColour === true ? ' (no other colour owned either)' : ''}`);
+    }
   }
   if (missing.length) {
     log(`⏭️ Missing ${missing.length} piece(s). Staying in the default outfit: ${missing.map(m => `${m.itemId}/colour ${m.colour} (${m.kind})`).join(', ')}`);
     return null;   // no clothes change means no makeup change either
   }
+  if (rows.length === 0) { log('⏭️ Every piece was skipped, so there is nothing to wear. Staying in the default outfit.'); return null; }
 
   const mine = await readLook(page);
   if (!mine.appearance) { log('⚠️ Could not read this account\'s own makeup. Staying in the default outfit.'); return null; }
@@ -297,9 +385,10 @@ async function dressFromBoard(page, clock) {
   }
 
   // ---- 1) clothes (the game's look save ignores makeup changes, so this keeps the account's own makeup)
+  // the original layer numbers are kept; a skipped minor piece just leaves a gap (the game accepts that)
   const items = rows.map((r, i) => `items%5B${i}%5D%5Bid%5D=${r.id}&items%5B${i}%5D%5Boffset%5D=${r.layer}`).join('&');
   const body = `action=saveChanges&selectedPet=&${items}&${makeupBody(myEntries)}`;
-  if (DRY_RUN) { log(`🧪 DRY RUN: the account owns every piece. Would save the clothes now, then: ${makeupNote}. Nothing changed.`); return null; }
+  if (DRY_RUN) { log(`🧪 DRY RUN: the look can be dressed (${rows.length} pieces, ${swaps.length} colour swap(s), ${skipped.length} minor piece(s) skipped). Would save the clothes now, then: ${makeupNote}. Nothing changed.`); return null; }
 
   const r = await postBody(page, '/ajax/wardrobe/lady.php', body);
   const noChange = r && r.status === 0 && /no changes made/i.test(String(r.message || ''));
@@ -319,12 +408,12 @@ async function dressFromBoard(page, clock) {
     }
   }
 
-  // ---- 3) read everything back and confirm
+  // ---- 3) read everything back and confirm (CHANGED: compares against what was actually chosen)
   const after = await readLook(page);
-  const want = look.map(l => `${l.itemId}:${l.colour}`).sort().join(',');
+  const want = rows.map(w => `${w.itemId}:${w.colour}`).sort().join(',');
   const got = after.worn.map(w => `${w.itemId}:${w.colour}`).sort().join(',');
   if (want !== got) {
-    log(`⚠️ Look saved, but what is worn now differs from the record. Wanted ${want}, got ${got}.`);
+    log(`⚠️ Look saved, but what is worn now differs from what was chosen. Wanted ${want}, got ${got}.`);
     return null;
   }
   if (copyMakeup) {
@@ -334,8 +423,9 @@ async function dressFromBoard(page, clock) {
       return null;
     }
   }
-  log(`✅ Look saved and confirmed (${look.length} pieces), ${makeupNote}.`);
-  return `✅ Outfit follower: ${noChange ? 'look already on' : 'look copied'} and confirmed (${look.length} pieces), ${makeupNote}.`;
+  const extra = (swaps.length || skipped.length) ? `, ${swaps.length} colour swap(s), ${skipped.length} minor skipped` : '';
+  log(`✅ Look saved and confirmed (${rows.length} pieces${extra}), ${makeupNote}.`);
+  return `✅ Outfit follower: ${noChange ? 'look already on' : 'look copied'} and confirmed (${rows.length} pieces${extra}), ${makeupNote}.`;
 }
 
 // ---------------------------------------------------------------- entry point
